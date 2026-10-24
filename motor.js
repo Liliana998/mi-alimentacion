@@ -471,12 +471,11 @@
   function r1(n) { return n === null ? null : Math.round(n * 10) / 10; }
   function nombreAlimento(a) { return a.nombre + (a.marca ? ' (' + a.marca + ')' : ''); }
 
-  // Calorias calculadas con los macronutrientes (4-9-4; la fibra cuenta 2 kcal/g si se conoce).
+  // Calorias calculadas con los macronutrientes (4-9-4), como en la etiqueta mexicana:
+  // los «hidratos de carbono disponibles» ya excluyen la fibra.
   function kcalMacros(n) {
     if (num(n.prot) === null || num(n.grasa) === null || num(n.carb) === null) return null;
-    var f = num(n.fibra), c = num(n.carb);
-    var carb = f !== null && f <= c ? 4 * (c - f) + 2 * f : 4 * c;
-    return Math.round(4 * num(n.prot) + 9 * num(n.grasa) + carb);
+    return Math.round((4 * num(n.prot) + 9 * num(n.grasa) + 4 * num(n.carb)) * 10) / 10;
   }
   function revisarAlimento(a) {
     var n = a.n || {}, m = kcalMacros(n), k = num(n.kcal);
@@ -538,8 +537,24 @@
       }
       return null;
     }
+    // Energia: se prefiere la que aparece despues de «100 g» y nunca la «por envase».
+    function energia() {
+      var desde = 0;
+      for (var k = 0; k < lineas.length; k++) if (/100\s*g/i.test(lineas[k])) { desde = k; break; }
+      var cand = [];
+      lineas.forEach(function (l, k) {
+        var re = /(\d{1,3}(?:[ .]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*kcal/gi, m;
+        while ((m = re.exec(l))) {
+          var envase = /envase|paquete/i.test(norm(l + ' ' + (lineas[k - 1] || '')));
+          var v = m[1].replace(/ (?=\d{3})/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.');
+          cand.push({ k: k, v: Number(v), envase: envase });
+        }
+      });
+      var bueno = cand.filter(function (c) { return !c.envase && c.k >= desde; })[0] || cand.filter(function (c) { return !c.envase; })[0];
+      return bueno ? bueno.v : null;
+    }
     var r = {
-      kcal: buscar(/contenido energetico|energia|calorias|kcal/, 'kcal'),
+      kcal: energia() !== null ? energia() : buscar(/contenido energetico|energia|calorias|kcal/, 'kcal'),
       prot: buscar(/proteina/, 'g'),
       grasa: buscar(/grasas? total|lipidos|grasas?\b/, 'g'),
       carb: buscar(/hidratos de carbono|carbohidratos/, 'g'),
