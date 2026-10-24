@@ -933,10 +933,15 @@
 
       // Foto de la etiqueta (opcional): propone valores; nada queda confirmado.
       var cf = el('div', 'campo'); cf.appendChild(el('label', null, 'Foto de la etiqueta (opcional)'));
+      // Dos entradas: la cámara directa (capture) y la galería del teléfono.
+      var camara = el('input'); camara.type = 'file'; camara.accept = 'image/*'; camara.setAttribute('capture', 'environment'); camara.style.display = 'none';
       var file = el('input'); file.type = 'file'; file.accept = 'image/*'; file.style.display = 'none';
-      var bFoto = boton('Leer valores de una foto', 'boton', function () { file.click(); });
+      var filaF = el('div', 'acciones');
+      var bCam = boton('📷 Tomar foto', 'boton', function () { camara.click(); });
+      var bFoto = boton('Elegir de la galería', 'boton', function () { file.click(); });
+      filaF.appendChild(bCam); filaF.appendChild(bFoto);
       var estadoFoto = el('div', 'nutri');
-      cf.appendChild(bFoto); cf.appendChild(file); cf.appendChild(estadoFoto); cu.appendChild(cf);
+      cf.appendChild(filaF); cf.appendChild(camara); cf.appendChild(file); cf.appendChild(estadoFoto); cu.appendChild(cf);
 
       var cm = el('div', 'campo'); cm.appendChild(el('label', null, 'Los valores que copio de la etiqueta son'));
       var modo = el('select');
@@ -983,13 +988,14 @@
       }
       modo.addEventListener('change', revisar); iPg.addEventListener('input', revisar);
 
-      file.addEventListener('change', function () {
-        var fl = file.files && file.files[0]; if (!fl) return;
-        estadoFoto.textContent = 'Leyendo la etiqueta…'; bFoto.disabled = true;
+      function leerFoto(entrada) {
+        var fl = entrada.files && entrada.files[0]; if (!fl) return;
+        var file = entrada;
+        estadoFoto.textContent = 'Leyendo la etiqueta…'; bFoto.disabled = true; bCam.disabled = true;
         comprimirFoto(fl).then(function (dataUrl) {
           return api('leerEtiqueta', { imagen: dataUrl });
         }).then(function (r) {
-          bFoto.disabled = false; file.value = '';
+          bFoto.disabled = false; bCam.disabled = false; file.value = '';
           if (!r.ok) { estadoFoto.textContent = 'No se pudo leer la foto. Puede escribir los valores a mano.'; if (r.error === 'sesion') manejarError(r, function () {}); return; }
           var v = M.parsearEtiqueta(r.datos.texto), n = 0;
           M.NUTRIENTES.forEach(function (k) { if (v[k[0]] !== null) { entradas[k[0]].i.value = v[k[0]]; entradas[k[0]].cb.checked = false; n++; } });
@@ -1000,8 +1006,10 @@
           var det = el('details'); det.appendChild(el('summary', null, 'Ver el texto leído')); det.appendChild(el('pre', 'textoLeido', r.datos.texto));
           estadoFoto.appendChild(det);
           revisar();
-        }, function () { bFoto.disabled = false; estadoFoto.textContent = 'No se pudo leer la foto. Puede escribir los valores a mano.'; });
-      });
+        }, function () { bFoto.disabled = false; bCam.disabled = false; estadoFoto.textContent = 'No se pudo leer la foto. Puede escribir los valores a mano.'; });
+      }
+      camara.addEventListener('change', function () { leerFoto(camara); });
+      file.addEventListener('change', function () { leerFoto(file); });
 
       var acc = el('div', 'acciones'); acc.style.margin = '8px 16px';
       acc.appendChild(boton('Guardar', 'boton primario', function () {
