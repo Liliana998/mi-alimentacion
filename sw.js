@@ -1,7 +1,7 @@
 // Mi Alimentacion - service worker minimo (trasladado de Mis Gastos).
 // Solo permite instalar la aplicacion. No guarda menus, registros,
 // pesos ni respuestas del servicio: todo se pide siempre a internet.
-const VERSION_AL = 'al-v3-3';
+const VERSION_AL = 'al-v3-4';
 
 self.addEventListener('install', function () { self.skipWaiting(); });
 self.addEventListener('activate', function (e) {

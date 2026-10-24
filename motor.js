@@ -190,12 +190,14 @@
     function alternativasPlato(f, comidaId, sin) {
       var m = comida(comidaId), act = itemDe(f, comidaId).plato, actual = act.id, faltan = sin || [];
       // El plan repite platos en distintos dias: cada nombre se ofrece una sola vez.
-      var vistos = {}; vistos[norm(act.nombre)] = true;
+      // Tambien se agrupan los que llevan los mismos ingredientes con el nombre en otro orden.
+      function firma(p) { return p.comp.map(function (x) { return x.i; }).filter(function (i, k, l) { return l.indexOf(i) === k; }).sort().join('+'); }
+      var vistos = {}; vistos[norm(act.nombre)] = true; vistos['#' + firma(act)] = true;
       return pool(m).filter(function (p) {
         return p.id !== actual && p.activo && !contieneEvitado(p) &&
           !requeridos(p).some(function (i) { return faltan.indexOf(i) !== -1; });
       }).sort(function (a, b) { return (b.comidas[0] === comidaId) - (a.comidas[0] === comidaId); }).filter(function (p) {
-        var k = norm(p.nombre); if (vistos[k]) return false; vistos[k] = true; return true;
+        var k = norm(p.nombre), s = '#' + firma(p); if (vistos[k] || vistos[s]) return false; vistos[k] = vistos[s] = true; return true;
       }).map(function (p) {
         var avisos = [];
         if (!confirmado(p)) avisos.push('Por confirmar: ' + p.verificar);
