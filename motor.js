@@ -188,17 +188,22 @@
 
     // Otros platos posibles para una comida (almuerzo y cena son intercambiables).
     function alternativasPlato(f, comidaId, sin) {
-      var m = comida(comidaId), actual = itemDe(f, comidaId).plato.id, faltan = sin || [];
+      var m = comida(comidaId), act = itemDe(f, comidaId).plato, actual = act.id, faltan = sin || [];
+      // El plan repite platos en distintos dias: cada nombre se ofrece una sola vez.
+      var vistos = {}; vistos[norm(act.nombre)] = true;
       return pool(m).filter(function (p) {
         return p.id !== actual && p.activo && !contieneEvitado(p) &&
           !requeridos(p).some(function (i) { return faltan.indexOf(i) !== -1; });
+      }).sort(function (a, b) { return (b.comidas[0] === comidaId) - (a.comidas[0] === comidaId); }).filter(function (p) {
+        var k = norm(p.nombre); if (vistos[k]) return false; vistos[k] = true; return true;
       }).map(function (p) {
         var avisos = [];
         if (!confirmado(p)) avisos.push('Por confirmar: ' + p.verificar);
         if (p.comidas.length > 1) avisos.push(p.comidas.indexOf(comidaId) !== -1 && rotacionIncluye(p.id, comidaId) ? '' : '');
-        return { plato: p, avisos: avisos.filter(Boolean), puntos: puntaje(p) };
+        return { plato: p, avisos: avisos.filter(Boolean), puntos: puntaje(p), propio: p.comidas[0] === comidaId };
       }).sort(function (a, b) {
-        return a.avisos.length - b.avisos.length || b.puntos - a.puntos || a.plato.nombre.localeCompare(b.plato.nombre, 'es');
+        // Primero los platos propios de esa comida; despues, los de la otra (almuerzo/cena).
+        return (b.propio - a.propio) || a.avisos.length - b.avisos.length || b.puntos - a.puntos || a.plato.nombre.localeCompare(b.plato.nombre, 'es');
       });
     }
     function rotacionIncluye(id, comidaId) {

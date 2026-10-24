@@ -566,7 +566,12 @@
         cont.innerHTML = '';
         var alts = mot.alternativasPlato(f, it.comida, sin);
         if (!alts.length) cont.appendChild(el('p', 'nota', 'No hay otro plato del recetario sin esos ingredientes.'));
+        var otra = false;
         alts.forEach(function (a) {
+          if (!a.propio && !otra && alts[0].propio) {
+            otra = true;
+            cont.appendChild(el('p', 'nota', 'También puede elegir un plato de ' + (it.comida === 'almuerzo' ? 'cena' : 'almuerzo') + ':'));
+          }
           var b = el('button', 'alt'); b.type = 'button';
           b.appendChild(el('span', 'cant', a.plato.nombre));
           b.appendChild(el('span', 'det', a.plato.comp.map(function (x) { return mot.nombreIng(x.i) + ' ' + Math.round(x.g) + (x.e === 'ml' ? ' ml' : ' g'); }).join(' · ')));
