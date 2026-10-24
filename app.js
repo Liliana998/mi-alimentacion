@@ -524,6 +524,10 @@
       b.appendChild(boton('No la comí', 'boton', function () { registrar(f, it, 'omitida', '', reg); }));
       if (reg) b.appendChild(boton('Borrar registro', 'boton', function () { borrarRegistro(reg); }));
       cu.appendChild(b);
+      // Bebidas: fuera de la pantalla principal; se registran desde aqui.
+      var be = el('div', 'campo'); be.appendChild(el('label', null, 'Bebida'));
+      be.appendChild(boton('+ Cerveza 355 ml', 'boton', function () { cerrarHoja(); registrarCerveza(f); }));
+      cu.appendChild(be);
     });
   }
 
@@ -628,9 +632,7 @@
     var aviso = M.avisoReferencia(c);
     if (aviso) t.appendChild(el('div', 'alerta dentro', aviso + '.'));
     var bebidas = (est.datos.registro || []).filter(function (r) { return r.fecha === f && r.comida === 'bebida'; });
-    var fila = el('div', 'acciones');
-    fila.appendChild(boton('+ Cerveza 355 ml', 'boton', function () { registrarCerveza(f); }));
-    t.appendChild(fila);
+    // La cerveza solo aparece aqui si se registro ese dia (para poder quitarla).
     if (bebidas.length) {
       var ul = el('ul', 'lista');
       bebidas.forEach(function (r) {
@@ -639,8 +641,6 @@
       });
       t.appendChild(ul);
     }
-    var sem = mot.resumenSemana(f, est.datos.registro);
-    t.appendChild(el('div', 'nutri', 'Cervezas esta semana: ' + sem.cervezas + ' (referencia: hasta ' + sem.cervezasReferencia + ').'));
     return t;
   }
 
