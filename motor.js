@@ -517,13 +517,23 @@
   function parsearEtiqueta(texto) {
     var lineas = String(texto || '').split(/\n/).map(function (l) { return l.trim(); }).filter(Boolean);
     var plano = lineas.join('\n');
-    function numeros(l) { return (l.match(/\d+(?:[.,]\d+)?/g) || []).map(function (s) { return Number(s.replace(',', '.')); }); }
+    // Numeros sueltos de una linea, sin los que son kJ (kilojulios) ni porcentajes.
+    function numeros(l) {
+      var o = [], re = /(\d+(?:[.,]\d+)?)\s*(kj|%)?/gi, m;
+      while ((m = re.exec(l))) if (!m[2]) o.push(Number(m[1].replace(',', '.')));
+      return o;
+    }
     function buscar(re, unidad) {
       for (var k = 0; k < lineas.length; k++) {
         if (!re.test(norm(lineas[k]))) continue;
-        var l = lineas[k] + ' ' + (lineas[k + 1] || '');
-        var m = l.match(new RegExp('(\\d+(?:[.,]\\d+)?)\\s*' + unidad, 'i'));
+        var l = lineas[k] + ' ' + (lineas[k + 1] || '') + ' ' + (lineas[k + 2] || '');
+        var m = l.match(new RegExp('(\\d+(?:[.,]\\d+)?)\\s*' + unidad + '(?![a-z])', 'i'));
         if (m) return Number(m[1].replace(',', '.'));
+        if (unidad === 'kcal') { // solo kilojulios: se convierten (1 kcal = 4,184 kJ)
+          var j = l.match(/(\d+(?:[.,]\d+)?)\s*kj/i);
+          if (j) return Math.round(Number(j[1].replace(',', '.')) / 4.184);
+          continue;
+        }
         var ns = numeros(lineas[k]); if (ns.length) return ns[0];
       }
       return null;
