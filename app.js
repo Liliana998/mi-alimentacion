@@ -17,7 +17,7 @@
   var CLAVE_LLAVE = 'al_llave_dispositivo';
   var CLAVE_COMPRAS = 'al_compras_marcadas';
   var TITULOS = { hoy: 'Hoy', semana: 'Menú semanal', tengo: 'Con lo que tengo', compras: 'Lista de compras',
-    recetas: 'Recetas', progreso: 'Progreso', preferencias: 'Preferencias' };
+    recetas: 'Recetas', progreso: 'Progreso', preferencias: 'Preferencias', alimentos: 'Mis alimentos' };
 
   var est = {
     idToken: null, vence: 0, sesion: null, pinCreado: true, pin: '', pinPrimero: null,
@@ -319,7 +319,7 @@
 
   function rehacerMotor() {
     var d = est.datos;
-    est.motor = M.crear(d.contenido, d.preferencias, d.cambios || {}, d.nutricion || {});
+    est.motor = M.crear(d.contenido, d.preferencias, d.cambios || {}, d.nutricion || {}, d.alimentos || []);
   }
 
   function guardarAjuste(clave, valor, mensaje) {
@@ -433,7 +433,7 @@
   function registrar(f, it, estado, detalle, existente, items) {
     var opciones = textoPlato(it.plato);
     var registro = { id: existente ? existente.id : '', fecha: f, comida: it.comida, estado: estado,
-      detalle: estado === 'hecha' ? opciones : detalle, opciones: opciones, nota: '', items: items || [] };
+      detalle: estado === 'hecha' ? (detalle || opciones) : detalle, opciones: opciones, nota: '', items: items || [] };
     esperando(true);
     api('guardarRegistro', { registro: registro }).then(function (r) {
       esperando(false);
@@ -446,12 +446,15 @@
   }
 
   // Confirmar lo comido: los gramos del plan aparecen ya escritos y se pueden ajustar.
-  function abrirConfirmar(f, it, reg) {
+  // extra: alimento propio que se agrega a esta comida (se guarda en el MISMO registro, sin duplicarlo).
+  function abrirConfirmar(f, it, reg, extra) {
     var mot = est.motor, items = mot.itemsDe(it, true);
-    if (reg && reg.estado === 'hecha') { try { var prev = JSON.parse(reg.items || '[]'); if (prev.length) items = prev; } catch (e) { /* nada */ } }
+    if (reg && reg.estado !== 'omitida') { try { var prev = JSON.parse(reg.items || '[]'); if (prev.length) items = prev; } catch (e) { /* nada */ } }
     items = items.map(function (x) { return Object.assign({ usar: true }, x); });
+    if (extra) items.push(Object.assign({ usar: true }, extra));
     abrirHoja('Confirmar ' + it.nombre.toLowerCase(), function (cu) {
-      cu.appendChild(el('p', 'nota', 'Ajuste los gramos si comió otra cantidad y desmarque lo que no comió.'));
+      cu.appendChild(el('p', 'nota', extra ? 'Se agregó ' + extra.t + '. Si sustituye algo del plato, desmárquelo; si es adicional, deje todo marcado.' :
+        'Ajuste los gramos si comió otra cantidad y desmarque lo que no comió.'));
       var t = el('div', 'tarjeta'), lista = el('div');
       var total = el('div', 'nutri');
       function recalcular() {
@@ -462,9 +465,10 @@
         lista.innerHTML = '';
         items.forEach(function (x) {
           var fila = el('div', 'item');
-          var cb = el('input'); cb.type = 'checkbox'; cb.checked = x.usar; cb.setAttribute('aria-label', x.manual ? x.t : mot.nombreIng(x.i));
+          var nom = x.t || mot.nombreIng(x.i);
+          var cb = el('input'); cb.type = 'checkbox'; cb.checked = x.usar; cb.setAttribute('aria-label', x.manual ? x.t : nom);
           cb.addEventListener('change', function () { x.usar = cb.checked; recalcular(); });
-          var q = el('div', 'que', x.manual ? (x.t || 'Otro') + ' (' + x.kcal + ' kcal)' : mot.nombreIng(x.i) + (x.postre ? ' (postre)' : ''));
+          var q = el('div', 'que', x.manual ? (x.t || 'Otro') + ' (' + x.kcal + ' kcal)' : nom + (x.postre ? ' (postre)' : '') + (x.n && x.est ? ' · estimado' : ''));
           fila.appendChild(cb); fila.appendChild(q);
           if (!x.manual) {
             var g = el('input'); g.type = 'number'; g.inputMode = 'decimal'; g.min = '0'; g.step = '1'; g.style.width = '86px';
@@ -482,19 +486,31 @@
       var fila2 = el('div', 'fila'), sel = el('select');
       var claves = Object.keys(mot.tablaNutricion).filter(function (k) { return mot.contenido.ingredientes[k]; })
         .sort(function (a, b) { return mot.nombreIng(a).localeCompare(mot.nombreIng(b), 'es'); });
-      claves.forEach(function (k) { var o = el('option', null, mot.nombreIng(k)); o.value = k; if (k === 'aceite') o.selected = true; sel.appendChild(o); });
+      if (mot.alimentos.length) {
+        var og = el('optgroup'); og.label = 'Mis alimentos';
+        mot.alimentos.forEach(function (a) { var o = el('option', null, M.nombreAlimento(a)); o.value = a.id; og.appendChild(o); });
+        sel.appendChild(og);
+        var og2 = el('optgroup'); og2.label = 'Ingredientes del plan'; sel.appendChild(og2);
+      }
+      claves.forEach(function (k) { var o = el('option', null, mot.nombreIng(k)); o.value = k; if (k === 'aceite') o.selected = true; (og2 || sel).appendChild(o); });
       var gr = el('input'); gr.type = 'number'; gr.inputMode = 'decimal'; gr.placeholder = 'g'; gr.style.width = '86px';
       fila2.appendChild(sel); fila2.appendChild(gr);
       fila2.appendChild(boton('Agregar', 'mini', function () {
         var v = Number(String(gr.value).replace(',', '.'));
         if (!(v > 0)) { gr.focus(); return; }
-        items.push({ i: sel.value, g: v, e: sel.value === 'cerveza' ? 'ml' : 'listo', usar: true }); gr.value = ''; pintar();
+        var pa = mot.alimento(sel.value);
+        items.push(pa ? Object.assign({ usar: true }, M.itemAlimento(pa, v)) : { i: sel.value, g: v, e: sel.value === 'cerveza' ? 'ml' : 'listo', usar: true });
+        gr.value = ''; pintar();
       }));
       ag.appendChild(fila2); cu.appendChild(ag);
       var a = el('div', 'acciones'); a.style.margin = '8px 16px';
       a.appendChild(boton('Guardar', 'boton primario', function () {
         var final = items.filter(function (x) { return x.usar; }).map(function (x) { var y = Object.assign({}, x); delete y.usar; return y; });
-        registrar(f, it, 'hecha', '', reg, final);
+        var propios = final.some(function (x) { return x.n; }) || items.some(function (x) { return !x.usar; });
+        var texto = propios ? it.plato.nombre + ' con ajustes: ' + final.map(function (x) {
+          return x.manual ? (x.t || 'Otro') : (x.t || mot.nombreIng(x.i)) + (x.g !== null && x.g !== undefined ? ' ' + x.g + (x.e === 'ml' ? ' ml' : ' g') : ''); }).join('; ') : '';
+        if (reg && reg.estado === 'cambiada') registrar(f, it, 'cambiada', reg.detalle, reg, final);
+        else registrar(f, it, 'hecha', texto, reg, final);
       }));
       cu.appendChild(a);
       pintar();
@@ -863,6 +879,218 @@
       if (r.congela) t.appendChild(el('p', null, r.congela));
       if (r.nota) t.appendChild(el('div', 'alerta dentro', r.nota));
       cu.appendChild(t);
+    });
+  }
+
+  /* ====================== MIS ALIMENTOS (v4) ====================== */
+
+  SECCIONES.alimentos = function (c) {
+    var mot = est.motor, lista = mot.alimentos;
+    c.appendChild(el('p', 'nota', 'Productos y alimentos que no están en el recetario. Se guardan para volver a usarlos y se agregan a cualquier comida del día.'));
+    var b = boton('+ Agregar alimento', 'boton primario', function () { abrirAlimento(null); });
+    b.style.margin = '4px 16px 12px'; b.style.width = 'calc(100% - 32px)'; c.appendChild(b);
+    if (!lista.length) { c.appendChild(el('p', 'nota', 'Todavía no hay alimentos guardados.')); return; }
+    var t = el('div', 'tarjeta'), ul = el('ul', 'lista');
+    lista.slice().sort(function (a, b2) { return a.nombre.localeCompare(b2.nombre, 'es'); }).forEach(function (a) {
+      var v = M.valoresAlimento(a), estado = M.estadoAlimento(a);
+      var li = el('li'), q = el('div', 'que', M.nombreAlimento(a));
+      var det = el('div', 'gris', (v.n.kcal === null ? 'Calorías pendientes' : v.n.kcal + ' kcal') +
+        (v.n.prot !== null ? ' · ' + String(v.n.prot).replace('.', ',') + ' g de proteína' : '') + ' por 100 g');
+      q.appendChild(det);
+      var et = el('span', 'etiqueta' + (estado === 'Confirmado' ? '' : ' aviso2'), estado); q.appendChild(et);
+      if (v.revision.inconsistente) q.appendChild(el('span', 'etiqueta aviso2', 'Calorías por revisar'));
+      li.appendChild(q);
+      var bs = el('div', 'fila');
+      bs.appendChild(boton('Usar', 'mini', function () { usarAlimento(a); }));
+      bs.appendChild(boton('Editar', 'mini', function () { abrirAlimento(a); }));
+      li.appendChild(bs); ul.appendChild(li);
+    });
+    t.appendChild(ul); c.appendChild(t);
+  };
+
+  function guardarAlimentos(lista, mensaje) {
+    return guardarAjuste('alimentos', lista, mensaje).then(function (ok) { if (ok) { cerrarHoja(); repintar(); } return ok; });
+  }
+
+  // Alta y edicion. Los valores se guardan por 100 g; si se copian por porcion, se convierten.
+  function abrirAlimento(a) {
+    var orig = a, d = JSON.parse(JSON.stringify(a || { nombre: '', marca: '', porcion: { g: null, texto: '' }, n: {}, conf: {}, nota: '' }));
+    d.n = d.n || {}; d.conf = d.conf || {}; d.porcion = d.porcion || { g: null, texto: '' };
+    abrirHoja(orig ? 'Editar alimento' : 'Nuevo alimento', function (cu) {
+      function campo(etq, valor, tipo, ancho) {
+        var c = el('div', 'campo'); c.appendChild(el('label', null, etq));
+        var i = el('input'); i.type = tipo || 'text'; if (tipo === 'number') { i.inputMode = 'decimal'; i.min = '0'; i.step = 'any'; }
+        if (ancho) i.style.width = ancho;
+        i.value = valor === null || valor === undefined ? '' : valor; c.appendChild(i); cu.appendChild(c); return i;
+      }
+      var iNom = campo('Nombre del alimento o producto', d.nombre); iNom.maxLength = 80;
+      var iMar = campo('Marca (opcional)', d.marca); iMar.maxLength = 60;
+      var cp = el('div', 'campo'); cp.appendChild(el('label', null, 'Porción de referencia (opcional)'));
+      var fp = el('div', 'fila'), iPg = el('input'), iPt = el('input');
+      iPg.type = 'number'; iPg.inputMode = 'decimal'; iPg.placeholder = 'g'; iPg.style.width = '90px'; iPg.value = d.porcion.g === null ? '' : d.porcion.g;
+      iPt.type = 'text'; iPt.placeholder = 'Ejemplo: 1 taza'; iPt.maxLength = 40; iPt.value = d.porcion.texto || '';
+      fp.appendChild(iPg); fp.appendChild(el('span', 'unidad', 'g')); fp.appendChild(iPt); cp.appendChild(fp); cu.appendChild(cp);
+
+      // Foto de la etiqueta (opcional): propone valores; nada queda confirmado.
+      var cf = el('div', 'campo'); cf.appendChild(el('label', null, 'Foto de la etiqueta (opcional)'));
+      var file = el('input'); file.type = 'file'; file.accept = 'image/*'; file.style.display = 'none';
+      var bFoto = boton('Leer valores de una foto', 'boton', function () { file.click(); });
+      var estadoFoto = el('div', 'nutri');
+      cf.appendChild(bFoto); cf.appendChild(file); cf.appendChild(estadoFoto); cu.appendChild(cf);
+
+      var cm = el('div', 'campo'); cm.appendChild(el('label', null, 'Los valores que copio de la etiqueta son'));
+      var modo = el('select');
+      [['100', 'Por 100 g'], ['porcion', 'Por porción (se convierten a 100 g)']].forEach(function (o) { var x = el('option', null, o[1]); x.value = o[0]; modo.appendChild(x); });
+      cm.appendChild(modo); cu.appendChild(cm);
+
+      var tn = el('div', 'tarjeta'), entradas = {};
+      tn.appendChild(el('div', 'nota', 'Marque «Confirmado» solo en los datos que verificó en la etiqueta.'));
+      M.NUTRIENTES.forEach(function (k) {
+        var f = el('div', 'item'), q = el('div', 'que', k[1] + (k[0] === 'fibra' || k[0] === 'sodio' ? ' (si aparece)' : ''));
+        var i = el('input'); i.type = 'number'; i.inputMode = 'decimal'; i.min = '0'; i.step = 'any'; i.style.width = '86px';
+        i.value = d.n[k[0]] === null || d.n[k[0]] === undefined ? '' : d.n[k[0]];
+        var cb = el('input'); cb.type = 'checkbox'; cb.checked = !!d.conf[k[0]]; cb.setAttribute('aria-label', k[1] + ' confirmado');
+        var lc = el('label', 'unidad'); lc.appendChild(cb); lc.appendChild(document.createTextNode(' Confirmado'));
+        f.appendChild(q); f.appendChild(i); f.appendChild(el('span', 'unidad', k[2])); f.appendChild(lc);
+        tn.appendChild(f); entradas[k[0]] = { i: i, cb: cb };
+        i.addEventListener('input', revisar); cb.addEventListener('change', revisar);
+      });
+      var revision = el('div', 'nutri'), alerta = el('div', 'alerta dentro'); alerta.style.display = 'none';
+      tn.appendChild(revision); tn.appendChild(alerta); cu.appendChild(tn);
+      var iNota = campo('Nota (opcional)', d.nota); iNota.maxLength = 200;
+
+      function leer() {
+        var n = {}, conf = {}, factor = 1;
+        if (modo.value === 'porcion') { var pg = M.numAl(iPg.value); factor = pg ? 100 / pg : null; }
+        M.NUTRIENTES.forEach(function (k) {
+          var v = M.numAl(entradas[k[0]].i.value);
+          n[k[0]] = v === null || factor === null ? null : Math.round(v * factor * 100) / 100;
+          conf[k[0]] = entradas[k[0]].cb.checked && v !== null;
+        });
+        return { n: n, conf: conf, factor: factor };
+      }
+      function revisar() {
+        var x = leer(), rv = M.revisarAlimento({ n: x.n });
+        revision.textContent = rv.kcalMacros === null ? 'Con proteínas, grasas y carbohidratos se calculan las calorías para comprobar la etiqueta.' :
+          'Calculadas con los macronutrientes: ' + rv.kcalMacros + ' kcal por 100 g' + (rv.kcalEtiqueta !== null ? ' · etiqueta: ' + Math.round(rv.kcalEtiqueta) + ' kcal' : '') + '.';
+        entradas.kcal.cb.disabled = rv.inconsistente;
+        if (rv.inconsistente) {
+          entradas.kcal.cb.checked = false;
+          alerta.style.display = '';
+          alerta.textContent = 'Inconsistencia: las calorías de la etiqueta y las de los macronutrientes difieren en ' + Math.abs(rv.diferencia) +
+            ' kcal por 100 g. No se pueden confirmar hasta resolverla; mientras tanto se usan las calculadas con los macronutrientes, como estimado.';
+        } else alerta.style.display = 'none';
+      }
+      modo.addEventListener('change', revisar); iPg.addEventListener('input', revisar);
+
+      file.addEventListener('change', function () {
+        var fl = file.files && file.files[0]; if (!fl) return;
+        estadoFoto.textContent = 'Leyendo la etiqueta…'; bFoto.disabled = true;
+        comprimirFoto(fl).then(function (dataUrl) {
+          return api('leerEtiqueta', { imagen: dataUrl });
+        }).then(function (r) {
+          bFoto.disabled = false; file.value = '';
+          if (!r.ok) { estadoFoto.textContent = 'No se pudo leer la foto. Puede escribir los valores a mano.'; if (r.error === 'sesion') manejarError(r, function () {}); return; }
+          var v = M.parsearEtiqueta(r.datos.texto), n = 0;
+          M.NUTRIENTES.forEach(function (k) { if (v[k[0]] !== null) { entradas[k[0]].i.value = v[k[0]]; entradas[k[0]].cb.checked = false; n++; } });
+          if (v.porcionG && !iPg.value) iPg.value = v.porcionG;
+          modo.value = v.por100 ? '100' : 'porcion';
+          estadoFoto.textContent = n ? 'Se propusieron ' + n + ' valores. Compárelos con la etiqueta y corrija lo necesario: ninguno queda confirmado.' :
+            'No se reconocieron valores. Escríbalos a mano.';
+          var det = el('details'); det.appendChild(el('summary', null, 'Ver el texto leído')); det.appendChild(el('pre', 'textoLeido', r.datos.texto));
+          estadoFoto.appendChild(det);
+          revisar();
+        }, function () { bFoto.disabled = false; estadoFoto.textContent = 'No se pudo leer la foto. Puede escribir los valores a mano.'; });
+      });
+
+      var acc = el('div', 'acciones'); acc.style.margin = '8px 16px';
+      acc.appendChild(boton('Guardar', 'boton primario', function () {
+        var nombre = iNom.value.replace(/\s+/g, ' ').trim();
+        if (!nombre) { iNom.focus(); return; }
+        var x = leer();
+        if (x.factor === null) { avisar('Para convertir por porción, escriba los gramos de la porción.', true); iPg.focus(); return; }
+        var nuevo = { id: orig ? orig.id : M.idAlimento(), nombre: nombre, marca: iMar.value.replace(/\s+/g, ' ').trim(),
+          porcion: { g: M.numAl(iPg.value), texto: iPt.value.trim() }, n: x.n, conf: x.conf, nota: iNota.value.trim(), actualizado: hoy() };
+        if (M.revisarAlimento(nuevo).inconsistente) nuevo.conf.kcal = false;
+        var lista = est.motor.alimentos.filter(function (y) { return y.id !== nuevo.id; }).concat([nuevo]);
+        guardarAlimentos(lista, 'Alimento guardado: ' + nombre + '.');
+      }));
+      cu.appendChild(acc);
+      if (orig) {
+        var b2 = el('div', 'acciones'); b2.style.margin = '8px 16px';
+        var bEl = boton('Eliminar este alimento', 'boton', function () {
+          if (!bEl.dataset.seguro) { bEl.dataset.seguro = '1'; bEl.textContent = 'Toque otra vez para eliminar (sus registros pasados se conservan)'; return; }
+          guardarAlimentos(est.motor.alimentos.filter(function (y) { return y.id !== orig.id; }), 'Alimento eliminado.');
+        });
+        b2.appendChild(bEl); cu.appendChild(b2);
+      }
+      revisar();
+    });
+  }
+
+  // Reduce la foto antes de enviarla (más rápido y sin datos de ubicación).
+  function comprimirFoto(archivo) {
+    return new Promise(function (ok, mal) {
+      var lector = new FileReader();
+      lector.onerror = mal;
+      lector.onload = function () {
+        var img = new Image();
+        img.onerror = mal;
+        img.onload = function () {
+          var max = 1800, k = Math.min(1, max / Math.max(img.width, img.height));
+          var cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+          cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+          ok(cv.toDataURL('image/jpeg', 0.85));
+        };
+        img.src = lector.result;
+      };
+      lector.readAsDataURL(archivo);
+    });
+  }
+
+  // Usar un alimento: gramos consumidos, calculo automatico y comida del dia donde se agrega.
+  function usarAlimento(a) {
+    var mot = est.motor, v = M.valoresAlimento(a);
+    abrirHoja(M.nombreAlimento(a), function (cu) {
+      cu.appendChild(el('p', 'nota', v.origenKcal === 'confirmado' ? 'Calorías confirmadas con la etiqueta.' :
+        (v.origenKcal === 'macros' ? 'Calorías estimadas con los macronutrientes (no confirmadas).' :
+          (v.origenKcal === 'etiqueta' ? 'Calorías de la etiqueta sin confirmar (estimado).' : 'Calorías pendientes: este alimento no sumará calorías hasta completarlas.'))));
+      var c1 = el('div', 'campo'); c1.appendChild(el('label', null, 'Gramos consumidos'));
+      var g = el('input'); g.type = 'number'; g.inputMode = 'decimal'; g.min = '0'; g.step = 'any'; g.style.width = '120px';
+      g.value = a.porcion && a.porcion.g ? a.porcion.g : 100; c1.appendChild(g);
+      if (a.porcion && a.porcion.g) c1.appendChild(el('span', 'unidad', ' porción: ' + a.porcion.g + ' g' + (a.porcion.texto ? ' (' + a.porcion.texto + ')' : '')));
+      cu.appendChild(c1);
+      var tr = el('div', 'tarjeta'), ul = el('ul', 'lista'); tr.appendChild(ul); cu.appendChild(tr);
+      function calcular() {
+        ul.innerHTML = '';
+        var n = M.nutrientesItem(M.itemAlimento(a, g.value));
+        M.NUTRIENTES.forEach(function (k) {
+          var li = el('li'); li.appendChild(el('div', 'que', k[1]));
+          li.appendChild(el('b', null, n[k[0]] === null ? '—' : String(n[k[0]]).replace('.', ',') + ' ' + k[2] +
+            ((k[0] === 'kcal' ? v.origenKcal !== 'confirmado' : !(a.conf || {})[k[0]]) && n[k[0]] !== null ? ' · estimado' : '')));
+          ul.appendChild(li);
+        });
+      }
+      g.addEventListener('input', calcular); calcular();
+      var c2 = el('div', 'campo'); c2.appendChild(el('label', null, 'Día'));
+      var dia = el('input'); dia.type = 'date'; dia.max = hoy(); dia.value = est.dia && est.dia <= hoy() ? est.dia : hoy(); c2.appendChild(dia); cu.appendChild(c2);
+      var c3 = el('div', 'campo'); c3.appendChild(el('label', null, 'Comida'));
+      var sc = el('select');
+      mot.plan.comidas.forEach(function (m) { var o = el('option', null, m.nombre); o.value = m.id; sc.appendChild(o); });
+      var hora = new Date().getHours();
+      sc.value = hora < 11 ? 'desayuno' : hora < 13 ? 'merienda1' : hora < 16 ? 'almuerzo' : hora < 19 ? 'merienda2' : 'cena';
+      if (!sc.value) sc.selectedIndex = 0;
+      c3.appendChild(sc); cu.appendChild(c3);
+      var acc = el('div', 'acciones'); acc.style.margin = '8px 16px';
+      acc.appendChild(boton('Agregar a esta comida', 'boton primario', function () {
+        var gr = M.numAl(g.value);
+        if (!(gr > 0)) { g.focus(); return; }
+        var f = dia.value || hoy();
+        var it = mot.menuDia(f).filter(function (x) { return x.comida === sc.value; })[0];
+        if (!it) return;
+        abrirConfirmar(f, it, registroDe(f, sc.value), M.itemAlimento(a, gr));
+      }));
+      cu.appendChild(acc);
     });
   }
 

@@ -1,5 +1,5 @@
 /**
- * Mi Alimentacion - motor v2
+ * Mi Alimentacion - motor v4 (v3 + Mis alimentos: productos propios por 100 g)
  * Logica pura, sin datos personales. Recibe el contenido (recetario, plan y
  * tablas de sustitucion, que llegan del servicio privado), las preferencias y
  * los cambios aprobados, y calcula: menu del dia (rotacion del recetario),
@@ -45,7 +45,9 @@
 
   /* ---------------- motor ---------------- */
 
-  function crear(contenido, preferencias, cambios, ajusteNutricion) {
+  function crear(contenido, preferencias, cambios, ajusteNutricion, alimentos) {
+    var ALIM = {};
+    (alimentos || []).forEach(function (a) { if (a && a.id) ALIM[a.id] = a; });
     var C = contenido, plan = C.plan;
     var P = Object.assign({}, C.preferenciasIniciales || {}, preferencias || {});
     ['gusta', 'evita', 'noProponer', 'confirmadas'].forEach(function (k) { P[k] = P[k] || []; });
@@ -316,7 +318,14 @@
       var r = { kcal: 0, prot: 0, estimado: false, faltan: [] };
       (lista || []).forEach(function (x) {
         if (x.manual) { r.kcal += Number(x.kcal) || 0; r.prot += Number(x.prot) || 0; r.estimado = true; return; }
-        if (x.g === null || x.g === undefined || x.g === '') { r.faltan.push(ing(x.i)[0]); return; }
+        if (x.g === null || x.g === undefined || x.g === '') { r.faltan.push(x.t || ing(x.i)[0]); return; }
+        if (x.n) { // alimento propio: valores por 100 g guardados al registrarlo
+          var v = nutrientesItem(x);
+          if (v.kcal === null) r.faltan.push(x.t || 'Alimento propio'); else r.kcal += v.kcal;
+          r.prot += v.prot || 0;
+          if (x.est || v.kcal === null) r.estimado = true;
+          return;
+        }
         var partes = COMP[x.i] ? COMP[x.i].map(function (c) { return { i: c[0], g: x.g * c[1] }; }) : [{ i: x.i, g: x.g }];
         partes.forEach(function (y) {
           var t = NUT[y.i];
@@ -430,7 +439,8 @@
     return { menuDia: menuDia, alternativasPlato: alternativasPlato, alternativasIngrediente: alternativasIngrediente,
       sustituible: sustituible, cambiarPlato: cambiarPlato, cambiarIngrediente: cambiarIngrediente,
       cambiarPostre: cambiarPostre, conLoQueTengo: conLoQueTengo, interpretarDisponibles: interpretarDisponibles,
-      listaCompras: listaCompras, textoCantidad: textoCantidad, nombreIng: function (i) { return ing(i)[0]; },
+      listaCompras: listaCompras, textoCantidad: textoCantidad,
+      nombreIng: function (i) { return ALIM[i] ? nombreAlimento(ALIM[i]) : ing(i)[0]; }, alimentos: alimentos || [], alimento: function (id) { return ALIM[id] || null; },
       receta: receta, plato: function (id) { return porId[id] || null; }, comida: comida, elegible: elegible,
       nutrir: nutrir, itemsDe: itemsDe, consumoDia: consumoDia, resumenSemana: resumenSemana,
       nutricionPlato: nutricionPlato, opcionesPostre: opcionesPostre, tablaNutricion: NUT, rendimientos: REND,
@@ -453,11 +463,92 @@
       objetivo: objetivo || null, faltan: objetivo ? r(ult.kg - objetivo) : null, lista: l };
   }
 
+  /* ---------------- Mis alimentos (v4) ---------------- */
+  // Valores por 100 g. conf[k] = true cuando la usuaria confirmo ese dato con la etiqueta.
+  var NUTRIENTES = [['kcal', 'Calorías', 'kcal'], ['prot', 'Proteínas', 'g'], ['grasa', 'Grasas', 'g'],
+    ['carb', 'Carbohidratos', 'g'], ['fibra', 'Fibra', 'g'], ['sodio', 'Sodio', 'mg']];
+  function num(v) { if (v === null || v === undefined || v === '') return null; var n = Number(String(v).replace(',', '.')); return isFinite(n) && n >= 0 ? n : null; }
+  function r1(n) { return n === null ? null : Math.round(n * 10) / 10; }
+  function nombreAlimento(a) { return a.nombre + (a.marca ? ' (' + a.marca + ')' : ''); }
+
+  // Calorias calculadas con los macronutrientes (4-9-4; la fibra cuenta 2 kcal/g si se conoce).
+  function kcalMacros(n) {
+    if (num(n.prot) === null || num(n.grasa) === null || num(n.carb) === null) return null;
+    var f = num(n.fibra), c = num(n.carb);
+    var carb = f !== null && f <= c ? 4 * (c - f) + 2 * f : 4 * c;
+    return Math.round(4 * num(n.prot) + 9 * num(n.grasa) + carb);
+  }
+  function revisarAlimento(a) {
+    var n = a.n || {}, m = kcalMacros(n), k = num(n.kcal);
+    var dif = m !== null && k !== null ? Math.round(k - m) : null;
+    var inconsistente = dif !== null && Math.abs(dif) > Math.max(20, 0.15 * m);
+    return { kcalMacros: m, kcalEtiqueta: k, diferencia: dif, inconsistente: inconsistente };
+  }
+  // Valores con los que se calcula: calorias confirmadas; si no lo estan, las de los macronutrientes.
+  function valoresAlimento(a) {
+    var n = a.n || {}, conf = a.conf || {}, rv = revisarAlimento(a), v = {};
+    NUTRIENTES.forEach(function (x) { v[x[0]] = num(n[x[0]]); });
+    var origen;
+    if (conf.kcal && v.kcal !== null && !rv.inconsistente) origen = 'confirmado';
+    else if (rv.kcalMacros !== null) { v.kcal = rv.kcalMacros; origen = 'macros'; }
+    else origen = v.kcal !== null ? 'etiqueta' : 'pendiente';
+    return { n: v, origenKcal: origen, estimado: origen !== 'confirmado' || !(conf.prot && v.prot !== null), revision: rv };
+  }
+  function estadoAlimento(a) {
+    var v = valoresAlimento(a);
+    if (v.origenKcal === 'pendiente') return 'Pendiente';
+    return v.estimado ? 'Estimado' : 'Confirmado';
+  }
+  function itemAlimento(a, g) {
+    var v = valoresAlimento(a);
+    return { i: a.id, g: num(g), e: 'listo', t: nombreAlimento(a), n: v.n, est: v.estimado };
+  }
+  function nutrientesItem(x) {
+    var g = num(x.g), o = {};
+    NUTRIENTES.forEach(function (k) {
+      var v = x.n ? num(x.n[k[0]]) : null;
+      o[k[0]] = v === null || g === null ? null : (k[0] === 'kcal' ? Math.round(v * g / 100) : r1(v * g / 100));
+    });
+    return o;
+  }
+  function idAlimento() { var s = 'a_'; for (var k = 0; k < 10; k++) s += 'abcdefghijkmnpqrstuvwxyz23456789'.charAt(Math.floor(Math.random() * 32)); return s; }
+
+  // Lectura de una etiqueta (texto reconocido de la foto). Solo propone valores: todo queda sin confirmar.
+  function parsearEtiqueta(texto) {
+    var lineas = String(texto || '').split(/\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+    var plano = lineas.join('\n');
+    function numeros(l) { return (l.match(/\d+(?:[.,]\d+)?/g) || []).map(function (s) { return Number(s.replace(',', '.')); }); }
+    function buscar(re, unidad) {
+      for (var k = 0; k < lineas.length; k++) {
+        if (!re.test(norm(lineas[k]))) continue;
+        var l = lineas[k] + ' ' + (lineas[k + 1] || '');
+        var m = l.match(new RegExp('(\\d+(?:[.,]\\d+)?)\\s*' + unidad, 'i'));
+        if (m) return Number(m[1].replace(',', '.'));
+        var ns = numeros(lineas[k]); if (ns.length) return ns[0];
+      }
+      return null;
+    }
+    var r = {
+      kcal: buscar(/contenido energetico|energia|calorias|kcal/, 'kcal'),
+      prot: buscar(/proteina/, 'g'),
+      grasa: buscar(/grasas? total|lipidos|grasas?\b/, 'g'),
+      carb: buscar(/hidratos de carbono|carbohidratos/, 'g'),
+      fibra: buscar(/fibra/, 'g'),
+      sodio: buscar(/sodio/, 'mg')
+    };
+    var porcion = plano.match(/porci[oó]n[^\n\d]*(\d+(?:[.,]\d+)?)\s*g/i);
+    r.porcionG = porcion ? Number(porcion[1].replace(',', '.')) : null;
+    r.por100 = /100\s*g/i.test(plano);
+    return r;
+  }
+
   function avisoReferencia(c) {
     return c && c.excedente > 0 ? 'Has superado tu referencia diaria en ' + c.excedente + ' kcal' : '';
   }
 
-  var Motor = { crear: crear, avisoReferencia: avisoReferencia, progreso: progreso, norm: norm, iso: iso, sumarDias: sumarDias,
+  var Motor = { crear: crear, avisoReferencia: avisoReferencia, NUTRIENTES: NUTRIENTES, kcalMacros: kcalMacros,
+    revisarAlimento: revisarAlimento, valoresAlimento: valoresAlimento, estadoAlimento: estadoAlimento, itemAlimento: itemAlimento,
+    nutrientesItem: nutrientesItem, nombreAlimento: nombreAlimento, idAlimento: idAlimento, parsearEtiqueta: parsearEtiqueta, numAl: num, progreso: progreso, norm: norm, iso: iso, sumarDias: sumarDias,
     lunes: lunes, diaSemana: diaSemana, nombreDia: nombreDia, numero: numero };
   if (typeof module !== 'undefined' && module.exports) module.exports = Motor;
   else raiz.Motor = Motor;
