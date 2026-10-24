@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com/gsi/style; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://*.googleusercontent.com; connect-src https://script.google.com https://script.googleusercontent.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#5E8B6E">
+<title>Mi Alimentación</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lora:wght@500;600&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main>
+
+<!-- ============ ACCESO (igual que Mis Gastos) ============ -->
+<section id="vistaInicio" class="acceso">
+  <div class="sello">MD</div>
+  <h1>Mi Alimentación</h1>
+  <p id="inicioMensaje">Abriendo...</p>
+</section>
+
+<section id="vistaGoogle" class="acceso oculto">
+  <div class="sello">MD</div>
+  <h1>Mi Alimentación</h1>
+  <p>Inicie sesión con su cuenta de Google. Solo se pide la primera vez en cada dispositivo.</p>
+  <div id="botonGoogle"></div>
+  <div id="googleMensaje" class="aviso oculto"></div>
+</section>
+
+<section id="vistaPin" class="acceso oculto">
+  <div class="sello">MD</div>
+  <h1 id="pinTitulo">Ingrese su PIN</h1>
+  <p id="pinTexto">Clave de acceso de 7 dígitos.</p>
+  <div id="puntos" class="puntos"></div>
+  <div id="pinMensaje" role="alert"></div>
+  <div id="teclado" class="teclado"></div>
+  <button id="btnOtraCuenta" class="enlace" type="button">Entrar con otra cuenta de Google</button>
+</section>
+
+<!-- ============ APLICACIÓN ============ -->
+<section id="vistaApp" class="oculto">
+  <header class="cab">
+    <div class="sello chico">MD</div>
+    <div class="txt"><div class="titulo" id="tituloSeccion">Hoy</div></div>
+    <button class="redondo" data-accion="preferencias" type="button" aria-label="Preferencias">
+      <svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+    <button class="redondo" data-accion="bloquear" type="button" aria-label="Bloquear">
+      <svg viewBox="0 0 24 24" width="20" height="20"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+    </button>
+  </header>
+  <div id="aviso" class="confirmacion oculto" role="status"></div>
+  <div id="contenido"></div>
+  <nav class="pestanas" id="pestanas">
+    <button type="button" data-ir="hoy"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg><span>Hoy</span></button>
+    <button type="button" data-ir="tengo"><svg viewBox="0 0 24 24"><path d="M5 9h14l-1.5 10h-11z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg><span>Lo que tengo</span></button>
+    <button type="button" data-ir="compras"><svg viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg><span>Compras</span></button>
+    <button type="button" data-ir="recetas"><svg viewBox="0 0 24 24"><path d="M6 3h11a1 1 0 0 1 1 1v17l-3-2-3 2-3-2-3 2V4a1 1 0 0 1 1-1z"/><path d="M9 8h6M9 12h6"/></svg><span>Recetas</span></button>
+    <button type="button" data-ir="progreso"><svg viewBox="0 0 24 24"><path d="M4 19h16"/><path d="M6 15l4-4 3 3 5-6"/></svg><span>Progreso</span></button>
+  </nav>
+</section>
+
+<div id="hoja" class="hoja oculto" role="dialog" aria-modal="true">
+  <div class="hojaFondo" data-accion="cerrarHoja"></div>
+  <div class="hojaPanel"><div class="hojaCab"><b id="hojaTitulo"></b>
+    <button class="redondo chico" data-accion="cerrarHoja" type="button" aria-label="Cerrar">✕</button></div>
+    <div id="hojaCuerpo"></div></div>
+</div>
+
+<div id="cargando" class="cargando oculto"><div class="giro"></div></div>
+</main>
+<script src="config.js"></script>
+<script src="motor.js"></script>
+<script src="app.js"></script>
+<script src="https://accounts.google.com/gsi/client" async></script>
+</body>
+</html>
