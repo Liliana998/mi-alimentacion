@@ -3,7 +3,7 @@
   "short_name": "Mi Alimentación",
   "description": "Mi menú diario, sustituciones, compras, recetas y progreso.",
   "lang": "es-MX",
-  "id": "/mi-alimentacion/",
+  "id": "/mi-alimentacion/?app=md2",
   "start_url": "/mi-alimentacion/",
   "scope": "/mi-alimentacion/",
   "display": "standalone",
