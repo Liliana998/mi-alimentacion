@@ -45,7 +45,7 @@
 
   /* ---------------- motor ---------------- */
 
-  function crear(contenido, preferencias, cambios) {
+  function crear(contenido, preferencias, cambios, ajusteNutricion) {
     var C = contenido, plan = C.plan;
     var P = Object.assign({}, C.preferenciasIniciales || {}, preferencias || {});
     ['gusta', 'evita', 'noProponer', 'confirmadas'].forEach(function (k) { P[k] = P[k] || []; });
@@ -58,7 +58,21 @@
     function ing(i) { return C.ingredientes[i] || [i, 'Otros']; }
     function comida(id) { return plan.comidas.filter(function (m) { return m.id === id; })[0]; }
     function hora(m) { return P.horarios[m.id] || m.hora; }
-    function pool(m) { return plan.platos.filter(function (p) { return p.comidas.indexOf(m.pool) !== -1; }); }
+    var EXCL = plan.excluirEn || {};
+    function pool(m) {
+      var fuera = EXCL[m.id] || [];
+      return plan.platos.filter(function (p) {
+        return p.comidas.indexOf(m.pool) !== -1 && !p.comp.some(function (x) { return fuera.indexOf(x.i) !== -1; });
+      });
+    }
+    var INICIO = P.cicloInicio || plan.cicloInicio || null;
+    function previstoDe(f) {
+      if (plan.ciclo && plan.ciclo.length && INICIO) {
+        var n = plan.ciclo.length, dif = Math.round((fecha(f) - fecha(INICIO)) / 86400000);
+        return { fila: plan.ciclo[((dif % n) + n) % n], semana: Math.floor((((dif % n) + n) % n) / 7) + 1 };
+      }
+      return { fila: (plan.rotacion || {})[String(diaSemana(f))] || {}, semana: null };
+    }
 
     function contieneEvitado(p) {
       var n = norm(p.nombre).replace(/\bsin [a-z]+/g, ' ');
@@ -111,11 +125,16 @@
       return r;
     }
 
+    function opcionesPostre() {
+      var d = plan.postre && plan.postre.defecto;
+      return (d ? [d] : []).concat(plan.tablas.fruta || []);
+    }
     function postreDe(f, m, usados) {
-      if (!m.postre || !plan.tablas.fruta || !plan.tablas.fruta.length) return null;
+      if (!m.postre || !opcionesPostre().length) return null;
       var elegido = CAMBIOS[f + '|' + m.id + '|postre'];
-      var tabla = plan.tablas.fruta;
-      var o = elegido && tabla.filter(function (t) { return t.i === elegido; })[0];
+      var tabla = plan.tablas.fruta || [], def = plan.postre && plan.postre.defecto;
+      var o = elegido && opcionesPostre().filter(function (t) { return t.i === elegido; })[0];
+      if (!o && def) o = def;
       if (!o) {
         var libres = tabla.filter(function (t) { return !usados[t.i]; });
         var pes = function (t) { return P.gusta.indexOf(t.i) !== -1 ? 4 : 1; }, total = 0;
@@ -131,11 +150,11 @@
     var cacheDias = {};
     function menuDia(f) {
       if (cacheDias[f]) return cacheDias[f];
-      var d = diaSemana(f), rot = (plan.rotacion || {})[String(d)] || {};
+      var pv = previstoDe(f), rot = pv.fila;
       var usadosHoy = {}, frutasHoy = {}, dia = [];
       // Primero se fijan los cambios y los platos validos del recetario; despues, los reemplazos.
       var items = plan.comidas.map(function (m) {
-        var item = { comida: m.id, nombre: m.nombre, hora: hora(m), origen: 'recetario', nota: '', m: m,
+        var item = { comida: m.id, nombre: m.nombre, hora: hora(m), origen: 'recetario', nota: '', m: m, semana: pv.semana,
           previsto: porId[rot[m.id]] };
         var cambio = porId[CAMBIOS[f + '|' + m.id]];
         if (cambio) { item.p = cambio; item.origen = 'cambio'; }
@@ -151,7 +170,7 @@
           if (!lista.length) lista = pool(m).filter(elegible);
           item.p = adapt || elegir(lista, f + '|' + m.id);
           item.origen = 'reemplazo';
-          if (previsto) item.nota = 'El recetario proponía «' + previsto.nombre + '»' +
+          if (previsto) item.nota = (pv.semana ? 'El plan' : 'El recetario') + ' proponía «' + previsto.nombre + '»' +
             (previsto.motivo ? ': ' + previsto.motivo.split('.')[0].replace(/^./, function (c) { return c.toLowerCase(); }) + '.' : '.');
           usadosHoy[item.p.id] = true;
         }
@@ -258,6 +277,7 @@
 
     function textoCantidad(x) {
       var info = ing(x.i), est = (C.estados || {})[x.e];
+      if (x.g === null || x.g === undefined) return 'cantidad pendiente';
       if (x.e === 'ml') return Math.round(x.g) + ' ml';
       var base = x.g >= 1000 ? String(Math.round(x.g / 10) / 100).replace('.', ',') + ' kg' : Math.round(x.g) + ' g';
       if (info[2]) {
@@ -267,23 +287,131 @@
       return base + (est ? ', ' + est : '');
     }
 
-    function listaCompras(desde, dias, conPostre) {
-      var suma = {};
+    /* ---------------- nutricion, consumo real y compras ---------------- */
+
+    var NC = C.nutricion || { tabla: {}, rendimientos: {}, compuestos: {}, referenciaKcal: 1550 };
+    var AJ = ajusteNutricion || {};
+    var NUT = Object.assign({}, NC.tabla);
+    Object.keys(AJ.tabla || {}).forEach(function (k) {
+      NUT[k] = Object.assign({}, NUT[k] || {}, AJ.tabla[k], { fuente: 'usuario' });
+    });
+    var REND = Object.assign({}, NC.rendimientos);
+    Object.keys(AJ.rendimientos || {}).forEach(function (k) {
+      REND[k] = Object.assign({}, REND[k] || { compra: '' }, { mult: Number(AJ.rendimientos[k]) || 1, fuente: 'usuario' });
+    });
+    var COMP = NC.compuestos || {};
+    var REF = Number(AJ.referenciaKcal) || NC.referenciaKcal || 1550;
+    var CERVEZA = Object.assign({}, NC.cerveza || {}, AJ.cerveza || {});
+    if (AJ.cerveza && AJ.cerveza.kcal) NUT.cerveza = { kcal: AJ.cerveza.kcal / 3.55, prot: 0.5, fuente: 'usuario' };
+
+    // Calorias y proteina de una lista de alimentos {i, g, e} (o {manual, kcal}).
+    function nutrir(lista) {
+      var r = { kcal: 0, prot: 0, estimado: false, faltan: [] };
+      (lista || []).forEach(function (x) {
+        if (x.manual) { r.kcal += Number(x.kcal) || 0; r.prot += Number(x.prot) || 0; r.estimado = true; return; }
+        if (x.g === null || x.g === undefined || x.g === '') { r.faltan.push(ing(x.i)[0]); return; }
+        var partes = COMP[x.i] ? COMP[x.i].map(function (c) { return { i: c[0], g: x.g * c[1] }; }) : [{ i: x.i, g: x.g }];
+        partes.forEach(function (y) {
+          var t = NUT[y.i];
+          if (!t) { r.faltan.push(ing(y.i)[0]); return; }
+          r.kcal += t.kcal * y.g / 100; r.prot += t.prot * y.g / 100;
+          if (t.fuente !== 'usuario') r.estimado = true;
+        });
+      });
+      r.kcal = Math.round(r.kcal); r.prot = Math.round(r.prot * 10) / 10;
+      return r;
+    }
+
+    // Alimentos de una comida del menu, listos para registrarse (se pueden ajustar).
+    function itemsDe(it, conPostre) {
+      var l = it.plato.comp.map(function (x) { return { i: x.i, g: x.g, e: x.e }; });
+      if (conPostre && it.postre) l.push({ i: it.postre.i, g: it.postre.g, e: it.postre.e, postre: true });
+      return l;
+    }
+
+    function itemsRegistro(r) {
+      if (!r || r.estado === 'omitida') return [];
+      if (Array.isArray(r.items)) return r.items;
+      try { var v = JSON.parse(r.items || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+    }
+
+    var MOMENTOS = plan.comidas.map(function (m) { return m.id; });
+
+    // Consumo REAL de un dia: solo lo registrado. Lo planificado no cuenta.
+    function consumoDia(f, registros) {
+      var del = (registros || []).filter(function (r) { return r.fecha === f; });
+      var todos = [], sinDatos = 0, momentos = {}, cervezas = 0, kcalBebidas = 0;
+      del.forEach(function (r) {
+        var its = itemsRegistro(r);
+        if (r.comida === 'bebida') {
+          its.forEach(function (x) { if (x.i === 'cerveza') cervezas += 1; });
+          kcalBebidas += nutrir(its).kcal;
+        } else {
+          momentos[r.comida] = r.estado;
+          if (r.estado !== 'omitida' && !its.length) sinDatos += 1;
+        }
+        todos = todos.concat(its);
+      });
+      var n = nutrir(todos);
+      var faltanMomentos = MOMENTOS.filter(function (m) { return !momentos[m] && !(comida(m) || {}).opcional; });
+      return { fecha: f, kcal: n.kcal, prot: n.prot, estimado: n.estimado || sinDatos > 0, sinCantidad: n.faltan,
+        sinDatos: sinDatos, completo: !faltanMomentos.length, faltanMomentos: faltanMomentos,
+        cervezas: cervezas, kcalBebidas: kcalBebidas, referencia: REF,
+        excedente: n.kcal > REF ? n.kcal - REF : 0 };
+    }
+
+    function resumenSemana(f, registros) {
+      var lun = lunes(f), dias = [], cervezas = 0;
+      for (var d = 0; d < 7; d++) {
+        var c = consumoDia(sumarDias(lun, d), registros);
+        cervezas += c.cervezas;
+        if (c.completo) dias.push(c);
+      }
+      var prom = dias.length ? Math.round(dias.reduce(function (a, c) { return a + c.kcal; }, 0) / dias.length) : null;
+      var promP = dias.length ? Math.round(dias.reduce(function (a, c) { return a + c.prot; }, 0) / dias.length * 10) / 10 : null;
+      return { desde: lun, diasCompletos: dias.length, promedioKcal: prom, promedioProt: promP, cervezas: cervezas,
+        cervezasReferencia: CERVEZA.semanal || 3 };
+    }
+
+    function nutricionPlato(it) { return nutrir(itemsDe(it, true)); }
+
+    function cantidadCompra(i, g, estado) {
+      var info = ing(i);
+      if (info[2]) { var n = Math.ceil(g / info[2] - 0.05); return n + ' ' + info[3] + (n > 1 ? 's' : ''); }
+      var base = g >= 1000 ? String(Math.round(g / 10) / 100).replace('.', ',') + ' kg' : Math.round(g) + ' g';
+      return base + (estado ? ', ' + estado : '');
+    }
+
+    // Lista de compras: cantidad a CONSUMIR (estado del plan) y cantidad a COMPRAR
+    // (rendimiento aproximado), menos lo que ya tenga en casa.
+    function listaCompras(desde, dias, opciones) {
+      if (typeof opciones === 'boolean') opciones = { postre: opciones };
+      opciones = opciones || {};
+      var inv = opciones.inventario || {};
+      var suma = {}, pendientes = {};
+      function sumar(i, g, e) {
+        if (COMP[i]) { COMP[i].forEach(function (c) { sumar(c[0], g === null ? null : g * c[1], 'crudo'); }); return; }
+        var k = i + '|' + e;
+        if (g === null || g === undefined) { pendientes[i] = true; if (!suma[k]) suma[k] = { i: i, e: e, g: 0 }; return; }
+        if (!suma[k]) suma[k] = { i: i, e: e, g: 0 };
+        suma[k].g += g;
+      }
       for (var n = 0; n < dias; n++) {
         menuDia(sumarDias(desde, n)).forEach(function (it) {
-          var lista = it.plato.comp.slice();
-          if (conPostre && it.postre) lista.push(it.postre);
-          lista.forEach(function (x) {
-            var k = x.i + '|' + x.e;
-            if (!suma[k]) suma[k] = { i: x.i, e: x.e, g: 0 };
-            suma[k].g += x.g;
-          });
+          it.plato.comp.forEach(function (x) { sumar(x.i, x.g, x.e); });
+          if (opciones.postre !== false && it.postre) sumar(it.postre.i, it.postre.g, it.postre.e);
         });
       }
       var secciones = {};
       Object.keys(suma).forEach(function (k) {
-        var s = suma[k], info = ing(s.i);
-        (secciones[info[1]] = secciones[info[1]] || []).push({ clave: k, nombre: info[0], cantidad: textoCantidad(s), g: s.g, e: s.e });
+        var s = suma[k], info = ing(s.i), rd = REND[s.i];
+        var compraG = s.g * (rd ? rd.mult : 1), estadoCompra = rd ? rd.compra : (C.estados || {})[s.e];
+        var tengo = Number(inv[s.i]) || 0, falta = Math.max(0, compraG - tengo);
+        (secciones[info[1]] = secciones[info[1]] || []).push({ clave: k, i: s.i, nombre: info[0], g: s.g, e: s.e,
+          cantidad: s.g ? textoCantidad(s) : 'cantidad pendiente', pendiente: !!pendientes[s.i],
+          compraG: Math.round(compraG), tengo: tengo, faltaG: Math.round(falta),
+          compra: s.g ? (falta > 0 ? cantidadCompra(s.i, falta, estadoCompra) : 'Ya lo tiene') : 'según necesite',
+          rendimiento: rd ? (rd.fuente === 'plan' ? 'según su recetario' : rd.fuente === 'usuario' ? 'ajustado por usted' : 'aproximado') : '' });
       });
       return Object.keys(secciones).sort(function (a, b) { return a.localeCompare(b, 'es'); }).map(function (s) {
         return { seccion: s, items: secciones[s].sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); }) };
@@ -297,6 +425,9 @@
       cambiarPostre: cambiarPostre, conLoQueTengo: conLoQueTengo, interpretarDisponibles: interpretarDisponibles,
       listaCompras: listaCompras, textoCantidad: textoCantidad, nombreIng: function (i) { return ing(i)[0]; },
       receta: receta, plato: function (id) { return porId[id] || null; }, comida: comida, elegible: elegible,
+      nutrir: nutrir, itemsDe: itemsDe, consumoDia: consumoDia, resumenSemana: resumenSemana,
+      nutricionPlato: nutricionPlato, opcionesPostre: opcionesPostre, tablaNutricion: NUT, rendimientos: REND,
+      referenciaKcal: REF, cerveza: CERVEZA, momentos: MOMENTOS,
       preferencias: P, plan: plan, contenido: C, cambios: CAMBIOS };
   }
 
@@ -315,7 +446,11 @@
       objetivo: objetivo || null, faltan: objetivo ? r(ult.kg - objetivo) : null, lista: l };
   }
 
-  var Motor = { crear: crear, progreso: progreso, norm: norm, iso: iso, sumarDias: sumarDias,
+  function avisoReferencia(c) {
+    return c && c.excedente > 0 ? 'Has superado tu referencia diaria en ' + c.excedente + ' kcal' : '';
+  }
+
+  var Motor = { crear: crear, avisoReferencia: avisoReferencia, progreso: progreso, norm: norm, iso: iso, sumarDias: sumarDias,
     lunes: lunes, diaSemana: diaSemana, nombreDia: nombreDia, numero: numero };
   if (typeof module !== 'undefined' && module.exports) module.exports = Motor;
   else raiz.Motor = Motor;

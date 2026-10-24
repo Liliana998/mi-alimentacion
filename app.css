@@ -151,3 +151,9 @@ textarea, input[type=text], input[type=number], input[type=date], input[type=tim
 .platoNombre { font: 600 16.5px Inter, sans-serif; color: var(--texto); margin-right: 4px; }
 .item.postre { background: var(--fondo); border-radius: 12px; padding: 9px 10px; margin-top: 6px; border-top: none; }
 .alt .det { display: block; font-size: 13px; color: var(--gris); margin-top: 4px; }
+.nutri { font-size: 13.5px; color: var(--gris); margin-top: 8px; }
+.grande2 { font: 600 20px Lora, Georgia, serif; color: var(--tinta2); margin: 2px 0; }
+.gris { font-size: 13px; color: var(--gris); }
+.unidad { font-size: 13px; color: var(--gris); }
+.tarjeta.resumen { border-color: var(--marca2); }
+select { border: 1px solid var(--linea); border-radius: 12px; padding: 10px; background: var(--papel); flex: 1; min-width: 0; }

@@ -319,7 +319,7 @@
 
   function rehacerMotor() {
     var d = est.datos;
-    est.motor = M.crear(d.contenido, d.preferencias, d.cambios || {});
+    est.motor = M.crear(d.contenido, d.preferencias, d.cambios || {}, d.nutricion || {});
   }
 
   function guardarAjuste(clave, valor, mensaje) {
@@ -334,7 +334,7 @@
   }
 
   function registroDe(fecha, comida) {
-    return (est.datos.registro || []).filter(function (r) { return r.fecha === fecha && r.comida === comida; })[0] || null;
+    return (est.datos.registro || []).filter(function (r) { return r.fecha === fecha && r.comida === comida && comida !== 'bebida'; })[0] || null;
   }
 
   /* ====================== NAVEGACIÓN ====================== */
@@ -396,12 +396,15 @@
     });
     if (it.postre) {
       var po = el('div', 'item postre'), q2 = el('div', 'que');
-      q2.appendChild(el('div', 'grupo', 'Algo dulce (opcional)'));
+      q2.appendChild(el('div', 'grupo', it.postre.i === 'gelatina_light' ? 'Postre' : 'Postre (fruta)'));
       var n2 = el('div', 'nombre', mot.nombreIng(it.postre.i) + ' '); n2.appendChild(el('span', 'cant', mot.textoCantidad(it.postre)));
       q2.appendChild(n2); po.appendChild(q2);
       if (editable) po.appendChild(boton('Cambiar', 'mini', function () { abrirCambioPostre(f, it); }));
       t.appendChild(po);
     }
+    var np = mot.nutricionPlato(it);
+    t.appendChild(el('div', 'nutri', 'Plan: ≈ ' + np.kcal + ' kcal · ' + String(np.prot).replace('.', ',') + ' g de proteína' +
+      (np.faltan.length ? ' (sin contar ' + np.faltan.join(', ').toLowerCase() + ')' : '') + ' · estimado'));
     var a = el('div', 'acciones');
     a.appendChild(boton('Preparación', 'boton', function () { verPlato(p.id); }));
     if (editable) a.appendChild(boton('Cambiar plato', 'boton', function () { abrirCambioPlato(f, it); }));
@@ -412,7 +415,9 @@
 
   function pintarEstado(t, f, it, reg) {
     if (reg) {
-      var txt = { hecha: '✓ Registrada como comida', cambiada: '✓ Comió otra cosa: ' + reg.detalle, omitida: 'No la comió' }[reg.estado];
+      var kc = est.motor.consumoDia(f, [reg]);
+      var txt = { hecha: '✓ Registrada', cambiada: '✓ Comió otra cosa: ' + reg.detalle, omitida: 'No la comió' }[reg.estado] +
+        (reg.estado !== 'omitida' ? (kc.sinDatos ? ' · sin detalle de cantidades' : ' · ' + kc.kcal + ' kcal') : '');
       var e = el('div', 'estado' + (reg.estado === 'omitida' ? ' omitida' : '')); e.appendChild(el('span', null, txt));
       e.appendChild(boton('Corregir', 'mini', function () { abrirRegistro(f, it, reg); }));
       t.appendChild(e);
@@ -420,22 +425,79 @@
     }
     if (f > hoy()) return; // no se registra lo que aun no ocurre
     var a = el('div', 'acciones');
-    a.appendChild(boton('✓ La comí', 'boton primario', function () { registrar(f, it, 'hecha', ''); }));
+    a.appendChild(boton('✓ La comí', 'boton primario', function () { abrirConfirmar(f, it, null); }));
     a.appendChild(boton('Otra cosa / no la comí', 'boton', function () { abrirRegistro(f, it, null); }));
     t.appendChild(a);
   }
 
-  function registrar(f, it, estado, detalle, existente) {
+  function registrar(f, it, estado, detalle, existente, items) {
     var opciones = textoPlato(it.plato);
     var registro = { id: existente ? existente.id : '', fecha: f, comida: it.comida, estado: estado,
-      detalle: estado === 'hecha' ? opciones : detalle, opciones: opciones, nota: '' };
+      detalle: estado === 'hecha' ? opciones : detalle, opciones: opciones, nota: '', items: items || [] };
     esperando(true);
     api('guardarRegistro', { registro: registro }).then(function (r) {
       esperando(false);
       if (!r.ok) { manejarError(r, function (t) { avisar(t, true); }); return; }
       est.datos.registro = (est.datos.registro || []).filter(function (x) { return x.id !== r.datos.id; }).concat([r.datos]);
       cerrarHoja(); repintar();
-      avisar(estado === 'omitida' ? 'Anotado: no la comió.' : 'Comida registrada.');
+      var c = est.motor.consumoDia(f, est.datos.registro);
+      avisar(M.avisoReferencia(c) || (estado === 'omitida' ? 'Anotado: no la comió.' : 'Comida registrada. Hoy lleva ' + c.kcal + ' kcal.'), !!c.excedente);
+    });
+  }
+
+  // Confirmar lo comido: los gramos del plan aparecen ya escritos y se pueden ajustar.
+  function abrirConfirmar(f, it, reg) {
+    var mot = est.motor, items = mot.itemsDe(it, true);
+    if (reg && reg.estado === 'hecha') { try { var prev = JSON.parse(reg.items || '[]'); if (prev.length) items = prev; } catch (e) { /* nada */ } }
+    items = items.map(function (x) { return Object.assign({ usar: true }, x); });
+    abrirHoja('Confirmar ' + it.nombre.toLowerCase(), function (cu) {
+      cu.appendChild(el('p', 'nota', 'Ajuste los gramos si comió otra cantidad y desmarque lo que no comió.'));
+      var t = el('div', 'tarjeta'), lista = el('div');
+      var total = el('div', 'nutri');
+      function recalcular() {
+        var n = mot.nutrir(items.filter(function (x) { return x.usar; }));
+        total.textContent = 'Total: ' + n.kcal + ' kcal · ' + String(n.prot).replace('.', ',') + ' g de proteína (estimado)';
+      }
+      function pintar() {
+        lista.innerHTML = '';
+        items.forEach(function (x) {
+          var fila = el('div', 'item');
+          var cb = el('input'); cb.type = 'checkbox'; cb.checked = x.usar; cb.setAttribute('aria-label', x.manual ? x.t : mot.nombreIng(x.i));
+          cb.addEventListener('change', function () { x.usar = cb.checked; recalcular(); });
+          var q = el('div', 'que', x.manual ? (x.t || 'Otro') + ' (' + x.kcal + ' kcal)' : mot.nombreIng(x.i) + (x.postre ? ' (postre)' : ''));
+          fila.appendChild(cb); fila.appendChild(q);
+          if (!x.manual) {
+            var g = el('input'); g.type = 'number'; g.inputMode = 'decimal'; g.min = '0'; g.step = '1'; g.style.width = '86px';
+            g.value = x.g === null || x.g === undefined ? '' : x.g; g.placeholder = 'g';
+            g.addEventListener('input', function () { var v = Number(String(g.value).replace(',', '.')); x.g = g.value === '' ? null : v; recalcular(); });
+            fila.appendChild(g); fila.appendChild(el('span', 'unidad', x.e === 'ml' ? 'ml' : 'g'));
+          }
+          lista.appendChild(fila);
+        });
+        recalcular();
+      }
+      t.appendChild(lista); t.appendChild(total); cu.appendChild(t);
+      // Agregar algo mas (aceite, fruta, etc.) o una estimacion manual
+      var ag = el('div', 'campo'); ag.appendChild(el('label', null, 'Agregar otro alimento (por ejemplo, aceite usado)'));
+      var fila2 = el('div', 'fila'), sel = el('select');
+      var claves = Object.keys(mot.tablaNutricion).filter(function (k) { return mot.contenido.ingredientes[k]; })
+        .sort(function (a, b) { return mot.nombreIng(a).localeCompare(mot.nombreIng(b), 'es'); });
+      claves.forEach(function (k) { var o = el('option', null, mot.nombreIng(k)); o.value = k; if (k === 'aceite') o.selected = true; sel.appendChild(o); });
+      var gr = el('input'); gr.type = 'number'; gr.inputMode = 'decimal'; gr.placeholder = 'g'; gr.style.width = '86px';
+      fila2.appendChild(sel); fila2.appendChild(gr);
+      fila2.appendChild(boton('Agregar', 'mini', function () {
+        var v = Number(String(gr.value).replace(',', '.'));
+        if (!(v > 0)) { gr.focus(); return; }
+        items.push({ i: sel.value, g: v, e: sel.value === 'cerveza' ? 'ml' : 'listo', usar: true }); gr.value = ''; pintar();
+      }));
+      ag.appendChild(fila2); cu.appendChild(ag);
+      var a = el('div', 'acciones'); a.style.margin = '8px 16px';
+      a.appendChild(boton('Guardar', 'boton primario', function () {
+        var final = items.filter(function (x) { return x.usar; }).map(function (x) { var y = Object.assign({}, x); delete y.usar; return y; });
+        registrar(f, it, 'hecha', '', reg, final);
+      }));
+      cu.appendChild(a);
+      pintar();
     });
   }
 
@@ -446,14 +508,19 @@
       ta.placeholder = 'Ejemplo: pollo 120 g con arroz y ensalada';
       if (reg && reg.estado === 'cambiada') ta.value = reg.detalle;
       c.appendChild(ta); cu.appendChild(c);
+      var ck = el('div', 'campo'); ck.appendChild(el('label', null, 'Calorías estimadas (opcional; por ejemplo, de un restaurante)'));
+      var kc = el('input'); kc.type = 'number'; kc.inputMode = 'numeric'; kc.min = '0'; kc.placeholder = 'kcal';
+      if (reg && reg.estado === 'cambiada') { try { var it0 = JSON.parse(reg.items || '[]')[0]; if (it0 && it0.manual) kc.value = it0.kcal; } catch (e) { /* nada */ } }
+      ck.appendChild(kc); cu.appendChild(ck);
       var a = el('div', 'acciones'); a.style.margin = '8px 16px';
       a.appendChild(boton('Guardar lo que comí', 'boton primario', function () {
         if (!ta.value.trim()) { ta.focus(); return; }
-        registrar(f, it, 'cambiada', ta.value.trim(), reg);
+        var k = Number(kc.value);
+        registrar(f, it, 'cambiada', ta.value.trim(), reg, k > 0 ? [{ manual: true, kcal: k, t: ta.value.trim().slice(0, 100) }] : []);
       }));
       cu.appendChild(a);
       var b = el('div', 'acciones'); b.style.margin = '8px 16px';
-      if (reg) b.appendChild(boton('✓ Comí lo previsto', 'boton', function () { registrar(f, it, 'hecha', '', reg); }));
+      if (reg) b.appendChild(boton('✓ Comí lo previsto', 'boton', function () { abrirConfirmar(f, it, reg); }));
       b.appendChild(boton('No la comí', 'boton', function () { registrar(f, it, 'omitida', '', reg); }));
       if (reg) b.appendChild(boton('Borrar registro', 'boton', function () { borrarRegistro(reg); }));
       cu.appendChild(b);
@@ -538,15 +605,55 @@
 
   function abrirCambioPostre(f, it) {
     var mot = est.motor;
-    abrirHoja('Algo dulce después de comer', function (cu) {
+    abrirHoja('Postre del almuerzo', function (cu) {
       cu.appendChild(el('p', 'nota', mot.plan.postre.texto));
-      mot.plan.tablas.fruta.forEach(function (t) {
+      mot.opcionesPostre().forEach(function (t) {
         if (t.i === it.postre.i) return;
         var b = el('button', 'alt'); b.type = 'button';
         b.appendChild(el('span', null, mot.nombreIng(t.i) + ' — ')); b.appendChild(el('span', 'cant', mot.textoCantidad(t)));
-        b.addEventListener('click', function () { guardarCambios(mot.cambiarPostre(f, it.comida, t.i), 'Fruta cambiada.'); });
+        b.addEventListener('click', function () { guardarCambios(mot.cambiarPostre(f, it.comida, t.i === 'gelatina_light' ? null : t.i), 'Postre cambiado.'); });
         cu.appendChild(b);
       });
+    });
+  }
+
+  // Consumo REAL registrado del dia (no cuenta lo planificado) y bebidas.
+  function resumenConsumo(f) {
+    var mot = est.motor, c = mot.consumoDia(f, est.datos.registro), t = el('div', 'tarjeta resumen');
+    var cab = el('div', 'tcab'); cab.appendChild(el('b', null, 'Consumo registrado'));
+    cab.appendChild(el('span', 'hora', c.completo ? 'Día completo' : 'Día incompleto')); t.appendChild(cab);
+    t.appendChild(el('div', 'grande2', c.kcal + ' kcal · ' + String(c.prot).replace('.', ',') + ' g de proteína'));
+    t.appendChild(el('div', 'nutri', 'Referencia diaria: ' + c.referencia + ' kcal' + (c.estimado || c.kcal ? ' · valores estimados' : '') +
+      (c.sinDatos ? ' · ' + c.sinDatos + ' comida(s) sin detalle de cantidades' : '')));
+    var aviso = M.avisoReferencia(c);
+    if (aviso) t.appendChild(el('div', 'alerta dentro', aviso + '.'));
+    var bebidas = (est.datos.registro || []).filter(function (r) { return r.fecha === f && r.comida === 'bebida'; });
+    var fila = el('div', 'acciones');
+    fila.appendChild(boton('+ Cerveza 355 ml', 'boton', function () { registrarCerveza(f); }));
+    t.appendChild(fila);
+    if (bebidas.length) {
+      var ul = el('ul', 'lista');
+      bebidas.forEach(function (r) {
+        var li = el('li'); li.appendChild(el('div', 'que', 'Cerveza 355 ml · ' + mot.consumoDia(f, [r]).kcal + ' kcal'));
+        li.appendChild(boton('Quitar', 'mini', function () { borrarRegistro(r); })); ul.appendChild(li);
+      });
+      t.appendChild(ul);
+    }
+    var sem = mot.resumenSemana(f, est.datos.registro);
+    t.appendChild(el('div', 'nutri', 'Cervezas esta semana: ' + sem.cervezas + ' (referencia: hasta ' + sem.cervezasReferencia + ').'));
+    return t;
+  }
+
+  function registrarCerveza(f) {
+    var r = { id: '', fecha: f, comida: 'bebida', estado: 'hecha', detalle: 'Cerveza regular 355 ml', opciones: '', nota: '',
+      items: [{ i: 'cerveza', g: 355, e: 'ml' }] };
+    esperando(true);
+    api('guardarRegistro', { registro: r }).then(function (x) {
+      esperando(false);
+      if (!x.ok) { manejarError(x, function (t) { avisar(t, true); }); return; }
+      est.datos.registro = (est.datos.registro || []).concat([x.datos]); repintar();
+      var c = est.motor.consumoDia(f, est.datos.registro);
+      avisar(M.avisoReferencia(c) || 'Cerveza registrada.', !!c.excedente);
     });
   }
 
@@ -563,6 +670,7 @@
     if (f !== hoy()) ch.appendChild(boton('Volver a hoy', 'chip', function () { est.dia = null; ir('hoy'); }));
     ch.appendChild(boton('Ver la semana', 'chip', function () { ir('semana'); }));
     c.appendChild(ch);
+    if (f <= hoy()) c.appendChild(resumenConsumo(f));
     est.motor.menuDia(f).forEach(function (it) { c.appendChild(tarjetaComida(f, it, true)); });
     if (est.motor.plan.notaDia) c.appendChild(el('p', 'nota', est.motor.plan.notaDia));
   };
@@ -621,17 +729,17 @@
   /* ====================== COMPRAS ====================== */
 
   SECCIONES.compras = function (c) {
-    var desde = hoy();
+    var mot = est.motor, desde = hoy(), inv = est.datos.inventario || {};
+    if ([7, 15, 28].indexOf(est.comprasDias) === -1) est.comprasDias = 7;
     var ch = el('div', 'chips');
-    [[7, 'Una semana'], [14, 'Dos semanas']].forEach(function (o) {
+    [[7, '7 días'], [15, '15 días'], [28, '28 días']].forEach(function (o) {
       ch.appendChild(boton(o[1], 'chip' + (est.comprasDias === o[0] ? ' activo' : ''), function () { est.comprasDias = o[0]; ir('compras'); }));
     });
-    ch.appendChild(boton('Incluir fruta de postre', 'chip' + (est.comprasPostre ? ' activo' : ''), function () { est.comprasPostre = !est.comprasPostre; ir('compras'); }));
     c.appendChild(ch);
     var hasta = M.sumarDias(desde, est.comprasDias - 1);
     c.appendChild(el('p', 'nota', 'Del ' + M.nombreDia(desde) + ' al ' + M.nombreDia(hasta) +
-      '. Incluye sus cambios aprobados. Los pesos indican el estado del plan: lo «cocido» pesa distinto en crudo; compre con margen.'));
-    var lista = est.motor.listaCompras(desde, est.comprasDias, !!est.comprasPostre);
+      '. Incluye sus cambios y la gelatina del almuerzo. «Consumo» es lo que pide el plan; «Comprar» convierte a crudo o seco con un rendimiento aproximado y descuenta lo que ya tiene.'));
+    var lista = mot.listaCompras(desde, est.comprasDias, { postre: true, inventario: inv });
     var marcadas = leerLocal(CLAVE_COMPRAS, {});
     var clavePeriodo = desde + '|' + est.comprasDias;
     if (marcadas.periodo !== clavePeriodo) marcadas = { periodo: clavePeriodo, items: {} };
@@ -645,7 +753,13 @@
         cb.addEventListener('change', function () {
           marcadas.items[i.clave] = cb.checked; guardarLocal(CLAVE_COMPRAS, marcadas); li.classList.toggle('tachado', cb.checked);
         });
-        li.appendChild(cb); li.appendChild(el('div', 'que', i.nombre)); li.appendChild(el('span', 'cant', i.cantidad));
+        var q = el('div', 'que');
+        q.appendChild(el('div', 'nombre', i.nombre));
+        q.appendChild(el('div', 'marca', 'Comprar: ' + i.compra + (i.rendimiento && i.g ? ' (rendimiento ' + i.rendimiento + ')' : '')));
+        q.appendChild(el('div', 'gris', 'Consumo: ' + i.cantidad + (i.tengo ? ' · ya tiene ' + Math.round(i.tengo) + ' g' : '') +
+          (i.pendiente ? ' · algunas comidas no indican cantidad' : '')));
+        li.appendChild(cb); li.appendChild(q);
+        if (i.g) li.appendChild(boton('Ya tengo', 'mini', function () { abrirInventario(i); }));
         ul.appendChild(li);
       });
       t.appendChild(ul); c.appendChild(t);
@@ -653,14 +767,33 @@
     var a = el('div', 'acciones'); a.style.margin = '8px 16px';
     a.appendChild(boton('Copiar la lista', 'boton', function () {
       var txt = 'Lista de compras (' + est.comprasDias + ' días)\n' + lista.map(function (s) {
-        return '\n' + s.seccion + ':\n' + s.items.map(function (i) { return '- ' + i.nombre + ': ' + i.cantidad; }).join('\n');
+        return '\n' + s.seccion + ':\n' + s.items.filter(function (i) { return i.compra !== 'Ya lo tiene'; })
+          .map(function (i) { return '- ' + i.nombre + ': ' + i.compra; }).join('\n');
       }).join('\n');
       (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(function () {
         avisar('Lista copiada. Puede pegarla en WhatsApp o en una nota.');
       }, function () { avisar('No se pudo copiar en este dispositivo.', true); });
     }));
+    if (Object.keys(inv).length) a.appendChild(boton('Vaciar «ya tengo»', 'boton', function () {
+      guardarAjuste('inventario', {}, 'Se vació la lista de lo que ya tiene.').then(function (ok) { if (ok) ir('compras'); });
+    }));
     c.appendChild(a);
   };
+
+  function abrirInventario(i) {
+    abrirHoja('Ya tengo: ' + i.nombre, function (cu) {
+      cu.appendChild(el('p', 'nota', 'Escriba cuántos gramos tiene en casa (en el mismo estado en que se compra: ' + (i.compra === 'Ya lo tiene' ? 'crudo o entero' : i.compra.replace(/^[\d,. ]+(kg|g)?,? ?/, '') || 'tal como se compra') + '). Se descontará de la lista.'));
+      var c = el('div', 'campo'), g = el('input'); g.type = 'number'; g.inputMode = 'decimal'; g.min = '0';
+      g.value = i.tengo || ''; g.placeholder = 'gramos'; c.appendChild(g); cu.appendChild(c);
+      var a = el('div', 'acciones'); a.style.margin = '8px 16px';
+      a.appendChild(boton('Guardar', 'boton primario', function () {
+        var inv = Object.assign({}, est.datos.inventario || {}), v = Number(String(g.value).replace(',', '.'));
+        if (v > 0) inv[i.i] = v; else delete inv[i.i];
+        guardarAjuste('inventario', inv, 'Guardado.').then(function (ok) { if (ok) { cerrarHoja(); ir('compras'); } });
+      }));
+      cu.appendChild(a);
+    });
+  }
 
   /* ====================== RECETAS ====================== */
 
@@ -699,7 +832,11 @@
       p.comp.forEach(function (x) { ul.appendChild(el('li', null, mot.nombreIng(x.i) + (x.t ? ' (' + x.t + ')' : '') + ': ' + mot.textoCantidad(x))); });
       t.appendChild(ul);
       t.appendChild(el('h2', null, 'Preparación')); var ol = el('ol');
-      p.prep.forEach(function (s) { ol.appendChild(el('li', null, s)); }); t.appendChild(ol);
+      (p.prep.length ? p.prep : ['Preparación sencilla según las recetas normalizadas del plan (sin tomate; aceite solo si lo usa, y se registra).'])
+        .forEach(function (s) { ol.appendChild(el('li', null, s)); }); t.appendChild(ol);
+      var np = est.motor.nutrir(p.comp);
+      t.appendChild(el('p', 'nota', 'Aproximadamente ' + np.kcal + ' kcal y ' + String(np.prot).replace('.', ',') + ' g de proteína (estimado' +
+        (np.faltan.length ? '; sin contar ' + np.faltan.join(', ').toLowerCase() : '') + ').'));
       if (p.verificar) t.appendChild(el('div', 'alerta dentro', 'Por confirmar: ' + p.verificar));
       t.appendChild(el('p', 'nota', 'Fuente: ' + p.fuente + '.'));
       cu.appendChild(t);
@@ -747,6 +884,18 @@
       });
     }));
     t.appendChild(a); c.appendChild(t);
+    var sem = est.motor.resumenSemana(hoy(), est.datos.registro), ant = est.motor.resumenSemana(M.sumarDias(hoy(), -7), est.datos.registro);
+    var ts = el('div', 'tarjeta'); ts.appendChild(el('div', 'tcab')).appendChild(el('b', null, 'Consumo registrado'));
+    [['Esta semana', sem], ['Semana anterior', ant]].forEach(function (x) {
+      var fila = el('div', 'item'), q = el('div', 'que');
+      q.appendChild(el('div', 'grupo', x[0]));
+      q.appendChild(el('div', 'nombre', x[1].diasCompletos ? 'Promedio: ' + x[1].promedioKcal + ' kcal · ' + String(x[1].promedioProt).replace('.', ',') + ' g de proteína al día'
+        : 'Aún no hay días completos registrados.'));
+      q.appendChild(el('div', 'gris', 'Días completos: ' + x[1].diasCompletos + ' de 7 · cervezas: ' + x[1].cervezas));
+      fila.appendChild(q); ts.appendChild(fila);
+    });
+    ts.appendChild(el('p', 'nota', 'El promedio solo usa días con las cinco comidas registradas. Valores estimados.'));
+    c.appendChild(ts);
     if (!p) { c.appendChild(el('p', 'nota', 'Aún no hay pesos registrados.')); return; }
     var cifras = el('div', 'cifras');
     function cifra(v, txt) { var d = el('div', 'cifra'); d.appendChild(el('b', null, v)); d.appendChild(el('small', null, txt)); cifras.appendChild(d); }
@@ -796,6 +945,42 @@
     var ob = el('input'); ob.type = 'number'; ob.step = '0.1'; ob.style.width = '110px'; ob.value = P.objetivoKg || '';
     ob.addEventListener('change', function () { P.objetivoKg = Number(String(ob.value).replace(',', '.')) || null; });
     f2.appendChild(ob); t2.appendChild(f2); c.appendChild(t2);
+
+    // Nutricion: referencia diaria, inicio del ciclo, cerveza y etiquetas de sus productos.
+    var N = JSON.parse(JSON.stringify(est.datos.nutricion || {})); N.tabla = N.tabla || {}; N.rendimientos = N.rendimientos || {};
+    c.appendChild(el('h2', null, 'Plan mensual y calorías'));
+    var tn = el('div', 'tarjeta');
+    function filaNum(texto, valor, alCambiar, ancho, tipo) {
+      var f = el('div', 'item'), inp = el('input'); inp.type = tipo || 'number'; inp.style.width = ancho || '110px';
+      inp.value = valor === undefined || valor === null ? '' : valor;
+      inp.addEventListener('change', function () { alCambiar(inp.value); });
+      f.appendChild(el('div', 'que', texto)); f.appendChild(inp); tn.appendChild(f); return inp;
+    }
+    filaNum('Referencia diaria (kcal)', N.referenciaKcal || mot.referenciaKcal, function (v) { N.referenciaKcal = Number(v) || null; });
+    filaNum('Inicio del ciclo (lunes de la semana 1)', P.cicloInicio || mot.plan.cicloInicio, function (v) { P.cicloInicio = v; }, '160px', 'date');
+    filaNum('Cerveza: kcal por lata de 355 ml', (N.cerveza && N.cerveza.kcal) || mot.cerveza.kcal, function (v) { N.cerveza = { kcal: Number(v) || 153 }; });
+    tn.appendChild(el('p', 'nota', 'Etiqueta de un producto: elija el alimento y escriba sus valores por 100 g (o 100 ml).'));
+    var fe = el('div', 'fila'), sel = el('select');
+    Object.keys(mot.tablaNutricion).filter(function (k) { return mot.contenido.ingredientes[k]; })
+      .sort(function (a, b) { return mot.nombreIng(a).localeCompare(mot.nombreIng(b), 'es'); })
+      .forEach(function (k) { var o = el('option', null, mot.nombreIng(k)); o.value = k; if (k === 'gelatina_light') o.selected = true; sel.appendChild(o); });
+    var ik = el('input'), ip = el('input'); ik.type = ip.type = 'number'; ik.placeholder = 'kcal'; ip.placeholder = 'proteína g';
+    ik.style.width = ip.style.width = '96px';
+    function mostrarValores() { var v = N.tabla[sel.value] || mot.tablaNutricion[sel.value]; ik.value = Math.round(v.kcal * 10) / 10; ip.value = v.prot;
+      info.textContent = v.fuente === 'usuario' || N.tabla[sel.value] ? 'Valor de su etiqueta.' : (v.fuente === 'plan' ? 'Calorías de su plan nutricional; proteína de referencia USDA (estimado).' : 'Referencia (estimado). ' + (v.nota || '')); }
+    var info = el('div', 'gris');
+    sel.addEventListener('change', mostrarValores);
+    ik.addEventListener('change', function () { N.tabla[sel.value] = { kcal: Number(ik.value) || 0, prot: Number(ip.value) || 0 }; });
+    ip.addEventListener('change', function () { N.tabla[sel.value] = { kcal: Number(ik.value) || 0, prot: Number(ip.value) || 0 }; });
+    fe.appendChild(sel); fe.appendChild(ik); fe.appendChild(ip); tn.appendChild(fe); tn.appendChild(info); mostrarValores();
+    c.appendChild(tn);
+    var an = el('div', 'acciones'); an.style.margin = '8px 16px';
+    an.appendChild(boton('Guardar calorías y etiquetas', 'boton primario', function () {
+      guardarAjuste('nutricion', N, 'Ajustes de nutrición guardados.').then(function (ok) {
+        if (ok) guardarAjuste('preferencias', P, null).then(function () { ir('preferencias'); });
+      });
+    }));
+    c.appendChild(an);
 
     var porConfirmar = plan.platos.filter(function (p) { return p.activo && p.verificar; });
     if (porConfirmar.length) {
