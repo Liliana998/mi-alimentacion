@@ -1,7 +1,7 @@
 // Mi Alimentacion - service worker minimo (trasladado de Mis Gastos).
 // Solo permite instalar la aplicacion. No guarda menus, registros,
 // pesos ni respuestas del servicio: todo se pide siempre a internet.
-const VERSION_AL = 'al-v3-1';
+const VERSION_AL = 'al-v3-2';
 
 self.addEventListener('install', function () { self.skipWaiting(); });
 self.addEventListener('activate', function (e) {
@@ -10,7 +10,7 @@ self.addEventListener('activate', function (e) {
 self.addEventListener('fetch', function (e) {
   // Solo la propia pagina; nunca las consultas al servicio de Google.
   if (e.request.mode !== 'navigate') return;
-  e.respondWith(fetch(e.request).catch(function () {
+  e.respondWith(fetch(e.request.url, { cache: 'no-cache', credentials: 'same-origin' }).catch(function () {
     return new Response(
       '<!doctype html><meta charset="utf-8"><meta name="viewport" ' +
       'content="width=device-width,initial-scale=1"><body style="font-family:' +
