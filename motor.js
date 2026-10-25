@@ -57,7 +57,12 @@
     plan.platos.forEach(function (p) { porId[p.id] = p; });
     var BAS = C.basicos || [];
 
-    function ing(i) { return C.ingredientes[i] || [i, 'Otros']; }
+    // Regla del plan: «2 huevos» puede cambiarse por 1 huevo + 60 a 80 g de claras líquidas (se usa 70 g).
+    var ING_EXTRA = { huevo_claras: ['Huevo y claras', 'Proteínas'] };
+    var TABLA_HUEVO = [{ i: 'huevo', g: 100, e: 'crudo', t: '2 huevos' },
+      { i: 'huevo_claras', g: 120, e: 'crudo',
+        aviso: 'Según su plan: 1 huevo + 60 a 80 g de claras líquidas (aquí 70 g; puede ajustarlo al registrar).' }];
+    function ing(i) { return C.ingredientes[i] || ING_EXTRA[i] || [i, 'Otros']; }
     function comida(id) { return plan.comidas.filter(function (m) { return m.id === id; })[0]; }
     function hora(m) { return P.horarios[m.id] || m.hora; }
     var EXCL = plan.excluirEn || {};
@@ -105,6 +110,7 @@
 
     // Equivalente de un ingrediente segun la tabla del plan (seccion 7, 8 o 9).
     function tablaDe(x) {
+      if (x.i === 'huevo' && Number(x.g) === 100 && (!x.rol || !plan.tablas[x.rol])) return { tabla: TABLA_HUEVO, ref: TABLA_HUEVO[0] };
       if (!x.rol || !plan.tablas[x.rol]) return null;
       var ref = plan.tablas[x.rol].filter(function (t) { return t.i === x.i; })[0];
       return ref ? { tabla: plan.tablas[x.rol], ref: ref } : null;
@@ -114,8 +120,10 @@
       if (!t) return null;
       var d = t.tabla.filter(function (y) { return y.i === destino; })[0];
       if (!d) return null;
-      return { i: d.i, g: redondear(d.g * x.g / t.ref.g), e: d.e, rol: x.rol, cambiado: true,
+      var r = { i: d.i, g: redondear(d.g * x.g / t.ref.g), e: d.e, rol: x.rol, cambiado: true,
         original: { i: x.i, g: x.g, e: x.e, t: x.t } };
+      if (d.t) r.t = d.t;
+      return r;
     }
 
     function platoResuelto(f, m, p) {
@@ -224,7 +232,7 @@
       }).map(function (y) {
         var eq = equivalente(base, y.i);
         return { i: y.i, nombre: ing(y.i)[0], g: eq.g, e: eq.e, original: y.i === base.i,
-          aviso: y.i === base.i ? 'Cantidad original del plato.' : 'Equivalencia aproximada según la tabla de sustituciones del plan.',
+          aviso: y.i === base.i ? 'Cantidad original del plato.' : (y.aviso || 'Equivalencia aproximada según la tabla de sustituciones del plan.'),
           puntos: P.gusta.indexOf(y.i) !== -1 ? 1 : 0 };
       }).sort(function (a, b) { return (b.original - a.original) || (b.puntos - a.puntos) || a.nombre.localeCompare(b.nombre, 'es'); });
     }
@@ -287,6 +295,7 @@
     function textoCantidad(x) {
       var info = ing(x.i), est = (C.estados || {})[x.e];
       if (x.g === null || x.g === undefined) return 'cantidad pendiente';
+      if (x.i === 'huevo_claras') return '1 huevo (' + Math.round(x.g * 50 / 120) + ' g) + ' + Math.round(x.g * 70 / 120) + ' g de claras líquidas, crudo';
       if (x.e === 'ml') return Math.round(x.g) + ' ml';
       var base = x.g >= 1000 ? String(Math.round(x.g / 10) / 100).replace('.', ',') + ' kg' : Math.round(x.g) + ' g';
       if (info[2]) {
@@ -308,7 +317,7 @@
     Object.keys(AJ.rendimientos || {}).forEach(function (k) {
       REND[k] = Object.assign({}, REND[k] || { compra: '' }, { mult: Number(AJ.rendimientos[k]) || 1, fuente: 'usuario' });
     });
-    var COMP = NC.compuestos || {};
+    var COMP = Object.assign({ huevo_claras: [['huevo', 50 / 120], ['claras', 70 / 120]] }, NC.compuestos || {});
     var REF = Number(AJ.referenciaKcal) || NC.referenciaKcal || 1550;
     var CERVEZA = Object.assign({}, NC.cerveza || {}, AJ.cerveza || {});
     if (AJ.cerveza && AJ.cerveza.kcal) NUT.cerveza = { kcal: AJ.cerveza.kcal / 3.55, prot: 0.5, fuente: 'usuario' };
@@ -340,7 +349,12 @@
 
     // Alimentos de una comida del menu, listos para registrarse (se pueden ajustar).
     function itemsDe(it, conPostre) {
-      var l = it.plato.comp.map(function (x) { return { i: x.i, g: x.g, e: x.e }; });
+      var l = [];
+      it.plato.comp.forEach(function (x) {
+        // «Huevo y claras» se registra por separado para poder ajustar las claras.
+        if (x.i === 'huevo_claras') { l.push({ i: 'huevo', g: Math.round(x.g * 50 / 120), e: 'crudo' }, { i: 'claras', g: Math.round(x.g * 70 / 120), e: 'crudo' }); return; }
+        l.push({ i: x.i, g: x.g, e: x.e });
+      });
       if (conPostre && it.postre) l.push({ i: it.postre.i, g: it.postre.g, e: it.postre.e, postre: true });
       return l;
     }
