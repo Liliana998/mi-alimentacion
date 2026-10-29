@@ -1,5 +1,5 @@
 /**
- * Mi Alimentacion - motor v4 (v3 + Mis alimentos: productos propios por 100 g)
+ * Mi Alimentacion - motor v5 (v4 + sustitucion de cualquier ingrediente con catalogo nutricional)
  * Logica pura, sin datos personales. Recibe el contenido (recetario, plan y
  * tablas de sustitucion, que llegan del servicio privado), las preferencias y
  * los cambios aprobados, y calcula: menu del dia (rotacion del recetario),
@@ -45,9 +45,12 @@
 
   /* ---------------- motor ---------------- */
 
-  function crear(contenido, preferencias, cambios, ajusteNutricion, alimentos) {
+  function crear(contenido, preferencias, cambios, ajusteNutricion, alimentos, catalogo) {
     var ALIM = {};
     (alimentos || []).forEach(function (a) { if (a && a.id) ALIM[a.id] = a; });
+    var CAT = (catalogo && catalogo.CATALOGO) || {}, FUENTE_CAT = (catalogo && catalogo.FUENTE) || 'Catálogo de referencia';
+    var NOMBRE_EXTRA = {}; // nombres de productos externos usados en sustituciones
+    Object.keys(cambios || {}).forEach(function (k) { var d = cambios[k]; if (d && typeof d === 'object' && d.i && d.t) NOMBRE_EXTRA[d.i] = d.t; });
     var C = contenido, plan = C.plan;
     var P = Object.assign({}, C.preferenciasIniciales || {}, preferencias || {});
     ['gusta', 'evita', 'noProponer', 'confirmadas'].forEach(function (k) { P[k] = P[k] || []; });
@@ -62,7 +65,14 @@
     var TABLA_HUEVO = [{ i: 'huevo', g: 100, e: 'crudo', t: '2 huevos' },
       { i: 'huevo_claras', g: 120, e: 'crudo',
         aviso: 'Según su plan: 1 huevo + 60 a 80 g de claras líquidas (aquí 70 g; puede ajustarlo al registrar).' }];
-    function ing(i) { return C.ingredientes[i] || ING_EXTRA[i] || [i, 'Otros']; }
+    function ing(i) {
+      if (C.ingredientes[i]) return C.ingredientes[i];
+      if (ING_EXTRA[i]) return ING_EXTRA[i];
+      if (ALIM[i]) return [nombreAlimento(ALIM[i]), 'Mis alimentos'];
+      var c = /^cat_/.test(i) && CAT[i.slice(4)];
+      if (c) return [c[0], c[1]];
+      return NOMBRE_EXTRA[i] ? [NOMBRE_EXTRA[i], 'Otros'] : [i, 'Otros'];
+    }
     function comida(id) { return plan.comidas.filter(function (m) { return m.id === id; })[0]; }
     function hora(m) { return P.horarios[m.id] || m.hora; }
     var EXCL = plan.excluirEn || {};
@@ -130,6 +140,9 @@
       var r = copia(p);
       r.comp = r.comp.map(function (x, k) {
         var dest = CAMBIOS[f + '|' + m.id + '|c' + k];
+        if (dest && typeof dest === 'object' && dest.i) { // sustitucion elegida por la usuaria, con su propia cantidad
+          return Object.assign({}, dest, { rol: x.rol, cambiado: true, libre: true, original: { i: x.i, g: x.g, e: x.e, t: x.t } });
+        }
         return (dest && equivalente(x, dest)) || x;
       });
       return r;
@@ -231,7 +244,7 @@
         return y.i !== x.i && faltan.indexOf(y.i) === -1 && P.evita.indexOf(y.i) === -1;
       }).map(function (y) {
         var eq = equivalente(base, y.i);
-        return { i: y.i, nombre: ing(y.i)[0], g: eq.g, e: eq.e, original: y.i === base.i,
+        return { i: y.i, nombre: ing(y.i)[0], g: eq.g, e: eq.e, original: y.i === base.i, kcal: nutrir([{ i: y.i, g: eq.g, e: eq.e }]).kcal,
           aviso: y.i === base.i ? 'Cantidad original del plato.' : (y.aviso || 'Equivalencia aproximada según la tabla de sustituciones del plan.'),
           puntos: P.gusta.indexOf(y.i) !== -1 ? 1 : 0 };
       }).sort(function (a, b) { return (b.original - a.original) || (b.puntos - a.puntos) || a.nombre.localeCompare(b.nombre, 'es'); });
@@ -248,9 +261,15 @@
       Object.keys(n).forEach(function (k) { if (k.indexOf(f + '|' + comidaId + '|c') === 0) delete n[k]; });
       return n;
     }
+    // ingId: clave de la tabla del plan (texto), un alimento con cantidad propia (objeto) o null para volver al original.
     function cambiarIngrediente(f, comidaId, k, ingId) {
       var it = itemDe(f, comidaId), x = it.plato.comp[k];
       var orig = x.original ? x.original.i : x.i;
+      if (ingId && typeof ingId === 'object') {
+        var o = { i: ingId.i, g: ingId.g, e: ingId.e };
+        ['t', 'n', 'est', 'med', 'fuente'].forEach(function (c) { if (ingId[c] !== undefined) o[c] = ingId[c]; });
+        return conCambio(f + '|' + comidaId + '|c' + k, o);
+      }
       return conCambio(f + '|' + comidaId + '|c' + k, ingId && ingId !== orig ? ingId : null);
     }
     function cambiarPostre(f, comidaId, ingId) { return conCambio(f + '|' + comidaId + '|postre', ingId); }
@@ -295,6 +314,7 @@
     function textoCantidad(x) {
       var info = ing(x.i), est = (C.estados || {})[x.e];
       if (x.g === null || x.g === undefined) return 'cantidad pendiente';
+      if (x.med) return x.med + ' (' + numero(Math.round(x.g * 10) / 10) + ' g)';
       if (x.i === 'huevo_claras') return '1 huevo (' + Math.round(x.g * 50 / 120) + ' g) + ' + Math.round(x.g * 70 / 120) + ' g de claras líquidas, crudo';
       if (x.e === 'ml') return Math.round(x.g) + ' ml';
       var base = x.g >= 1000 ? String(Math.round(x.g / 10) / 100).replace('.', ',') + ' kg' : Math.round(x.g) + ' g';
@@ -353,7 +373,9 @@
       it.plato.comp.forEach(function (x) {
         // «Huevo y claras» se registra por separado para poder ajustar las claras.
         if (x.i === 'huevo_claras') { l.push({ i: 'huevo', g: Math.round(x.g * 50 / 120), e: 'crudo' }, { i: 'claras', g: Math.round(x.g * 70 / 120), e: 'crudo' }); return; }
-        l.push({ i: x.i, g: x.g, e: x.e });
+        var y = { i: x.i, g: x.g, e: x.e };
+        ['t', 'n', 'est', 'med'].forEach(function (c) { if (x[c] !== undefined) y[c] = x[c]; });
+        l.push(y);
       });
       if (conPostre && it.postre) l.push({ i: it.postre.i, g: it.postre.g, e: it.postre.e, postre: true });
       return l;
@@ -404,6 +426,77 @@
     }
 
     function nutricionPlato(it) { return nutrir(itemsDe(it, true)); }
+
+    /* ---------------- catalogo nutricional (v5) ---------------- */
+    // Fuentes de datos para calcular un alimento: Mis alimentos, ingredientes del plan y catalogo de referencia.
+    var ESTADO_PLAN = {};
+    plan.platos.forEach(function (p) { p.comp.forEach(function (x) { if (!ESTADO_PLAN[x.i]) ESTADO_PLAN[x.i] = x.e; }); });
+    function fuenteCatalogo(clave) {
+      var c = CAT[clave], enPlan = !!(C.ingredientes[clave] && NUT[clave]);
+      if (!c && !enPlan) return null;
+      var n = { kcal: null, prot: null, grasa: null, carb: null, fibra: null, sodio: null };
+      if (c) { n = { kcal: c[3], prot: c[4], grasa: c[5], carb: c[6], fibra: c[7], sodio: c[8] }; }
+      if (enPlan) { n.kcal = NUT[clave].kcal; n.prot = NUT[clave].prot; }
+      return { clave: clave, id: enPlan ? clave : 'cat_' + clave, nombre: enPlan ? ing(clave)[0] : c[0],
+        grupo: enPlan ? ing(clave)[1] : c[1], estado: enPlan ? (ESTADO_PLAN[clave] || (c && c[2]) || 'listo') : c[2],
+        n: n, est: !(enPlan && NUT[clave].fuente === 'usuario'),
+        origen: enPlan ? (NUT[clave].fuente === 'usuario' ? 'Su etiqueta' : (NUT[clave].fuente === 'plan' ? 'Plan nutricional' : FUENTE_CAT)) +
+          (c && (c[5] !== null) ? ' · demás nutrientes: ' + FUENTE_CAT : '') : FUENTE_CAT,
+        medidas: c ? c[9] : [], densidad: c ? c[10] : null, alias: c ? c[11] : '' };
+    }
+    function fuenteAlimento(a) {
+      var v = valoresAlimento(a);
+      var med = a.porcion && a.porcion.g ? [['1 porción' + (a.porcion.texto ? ' (' + a.porcion.texto + ')' : ''), a.porcion.g]] : [];
+      return { clave: a.id, id: a.id, nombre: nombreAlimento(a), grupo: 'Mis alimentos', estado: 'listo', n: v.n, est: v.estimado,
+        origen: v.estimado ? 'Mis alimentos (estimado)' : 'Mis alimentos (confirmado)', medidas: med, densidad: null, alias: '', propio: true };
+    }
+    function todasLasFuentes() {
+      var vistos = {}, l = [];
+      (alimentos || []).forEach(function (a) { l.push(fuenteAlimento(a)); });
+      Object.keys(NUT).concat(Object.keys(CAT)).forEach(function (k) {
+        if (vistos[k] || k === 'cerveza') return; vistos[k] = true;
+        var fu = fuenteCatalogo(k); if (fu) l.push(fu);
+      });
+      return l;
+    }
+    function buscarAlimentos(texto, max) {
+      var q = norm(texto).split(/\s+/).filter(Boolean);
+      if (!q.length) return [];
+      return todasLasFuentes().map(function (fu) {
+        var nom = norm(fu.nombre), pal = (nom + ' ' + norm(fu.alias || '')).split(/[^a-z0-9]+/).filter(Boolean);
+        var ok = q.every(function (w) { return pal.some(function (p) { return p.indexOf(w) === 0; }); });
+        if (!ok) return null;
+        var s = (nom.indexOf(q.join(' ')) === 0 ? 4 : 0) + (fu.propio ? 2 : 0) + (C.ingredientes[fu.clave] ? 1 : 0);
+        return { fu: fu, s: s };
+      }).filter(Boolean).sort(function (a, b) { return b.s - a.s || a.fu.nombre.localeCompare(b.fu.nombre, 'es'); })
+        .slice(0, max || 12).map(function (x) { return x.fu; });
+    }
+    // Alimento listo para registrar: cantidad en gramos, mililitros o medida casera.
+    function itemDeFuente(fu, cantidad, unidad) {
+      var c = numero2(cantidad), g = null, med;
+      if (c === null) return null;
+      if (unidad === 'ml') { g = c * (fu.densidad || 1); med = numero(c) + ' ml'; }
+      else if (typeof unidad === 'number' && fu.medidas[unidad]) { g = c * fu.medidas[unidad][1]; med = (c === 1 ? '' : numero(c) + ' × ') + fu.medidas[unidad][0]; }
+      else g = c;
+      g = Math.round(g * 10) / 10;
+      var it = { i: fu.id, g: g, e: fu.estado, t: fu.nombre, n: fu.n, est: fu.est, fuente: fu.origen };
+      if (med) it.med = med;
+      return it;
+    }
+    function fuenteExterna(p) {
+      return { clave: 'off_' + p.codigo, id: 'off_' + p.codigo, nombre: p.nombre + (p.marca ? ' (' + p.marca + ')' : ''), grupo: 'Productos (en línea)',
+        estado: 'listo', n: p.n, est: true, origen: 'Open Food Facts (datos comunitarios, estimado)',
+        medidas: p.porcionG ? [['1 porción', p.porcionG]] : [], densidad: null, alias: '', externo: true };
+    }
+    function numero2(v) { if (v === null || v === undefined || v === '') return null; var n = Number(String(v).replace(',', '.')); return isFinite(n) && n > 0 ? n : null; }
+    // Nutrientes de un alimento ya calculado (con datos propios o de la tabla del plan).
+    function nutrientesDe(x) {
+      if (x.n) return nutrientesItem(x);
+      var r = nutrir([x]), o = { kcal: r.faltan.length ? null : r.kcal, prot: r.faltan.length ? null : r.prot, grasa: null, carb: null, fibra: null, sodio: null };
+      var c = CAT[x.i];
+      if (c && x.g) { o.grasa = Math.round(c[5] * x.g / 10) / 10; o.carb = Math.round(c[6] * x.g / 10) / 10; o.fibra = Math.round(c[7] * x.g / 10) / 10; o.sodio = c[8] === null ? null : Math.round(c[8] * x.g / 10) / 10; }
+      return o;
+    }
 
     function cantidadCompra(i, g, estado) {
       var info = ing(i);
@@ -457,6 +550,7 @@
       nombreIng: function (i) { return ALIM[i] ? nombreAlimento(ALIM[i]) : ing(i)[0]; }, alimentos: alimentos || [], alimento: function (id) { return ALIM[id] || null; },
       receta: receta, plato: function (id) { return porId[id] || null; }, comida: comida, elegible: elegible,
       nutrir: nutrir, itemsDe: itemsDe, consumoDia: consumoDia, resumenSemana: resumenSemana,
+      buscarAlimentos: buscarAlimentos, fuenteCatalogo: fuenteCatalogo, fuenteExterna: fuenteExterna, fuenteAlimento: fuenteAlimento, itemDeFuente: itemDeFuente, nutrientesDe: nutrientesDe,
       nutricionPlato: nutricionPlato, opcionesPostre: opcionesPostre, tablaNutricion: NUT, rendimientos: REND,
       referenciaKcal: REF, cerveza: CERVEZA, momentos: MOMENTOS,
       preferencias: P, plan: plan, contenido: C, cambios: CAMBIOS };

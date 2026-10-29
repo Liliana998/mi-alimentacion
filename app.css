@@ -159,3 +159,4 @@ textarea, input[type=text], input[type=number], input[type=date], input[type=tim
 select { border: 1px solid var(--linea); border-radius: 12px; padding: 10px; background: var(--papel); flex: 1; min-width: 0; }
 .textoLeido { white-space: pre-wrap; font-size: 12.5px; color: var(--gris); background: var(--fondo); padding: 8px; border-radius: 10px; max-height: 220px; overflow: auto; }
 .item .unidad input { vertical-align: middle; }
+.subtitulo { font: 600 16px Lora, Georgia, serif; color: var(--tinta2); margin: 16px 16px 4px; }

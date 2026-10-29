@@ -319,7 +319,7 @@
 
   function rehacerMotor() {
     var d = est.datos;
-    est.motor = M.crear(d.contenido, d.preferencias, d.cambios || {}, d.nutricion || {}, d.alimentos || []);
+    est.motor = M.crear(d.contenido, d.preferencias, d.cambios || {}, d.nutricion || {}, d.alimentos || [], window.CATALOGO_AL || null);
   }
 
   function guardarAjuste(clave, valor, mensaje) {
@@ -385,13 +385,16 @@
     if (it.nota) t.appendChild(el('div', 'marca', it.nota));
     p.comp.forEach(function (x, k) {
       var fila = el('div', 'item'), q = el('div', 'que');
-      var n = el('div', 'nombre', mot.nombreIng(x.i) + (x.t && !x.cambiado && x.e !== 'ml' ? ' (' + x.t + ')' : '') + ' ');
+      var n = el('div', 'nombre', (x.libre && x.t ? x.t : mot.nombreIng(x.i)) + (x.t && !x.cambiado && x.e !== 'ml' ? ' (' + x.t + ')' : '') + ' ');
       n.appendChild(el('span', 'cant', mot.textoCantidad(x)));
       q.appendChild(n);
-      if (x.cambiado) q.appendChild(el('div', 'marca', 'En lugar de ' + mot.nombreIng(x.original.i).toLowerCase() + ' ' +
-        x.original.g + ' g · equivalencia de la tabla del plan'));
+      if (x.cambiado) {
+        var kAntes = mot.nutrir([x.original]).kcal, kAhora = mot.nutrir([x]);
+        q.appendChild(el('div', 'marca', 'En lugar de ' + mot.nombreIng(x.original.i).toLowerCase() + ' ' + x.original.g + ' g (≈ ' + kAntes + ' kcal) · ahora ' +
+          (kAhora.faltan.length ? 'sin datos de calorías' : '≈ ' + kAhora.kcal + ' kcal') + (x.libre ? ' · ' + (x.est === false ? 'verificado' : 'estimado') : ' · equivalencia de la tabla del plan')));
+      }
       fila.appendChild(q);
-      if (editable && mot.sustituible(x)) fila.appendChild(boton('Cambiar', 'mini', function () { abrirCambioIng(f, it, k); }));
+      if (editable) fila.appendChild(boton('Cambiar', 'mini', function () { abrirCambioIng(f, it, k); }));
       t.appendChild(fila);
     });
     if (it.postre) {
@@ -524,15 +527,36 @@
       ta.placeholder = 'Ejemplo: pollo 120 g con arroz y ensalada';
       if (reg && reg.estado === 'cambiada') ta.value = reg.detalle;
       c.appendChild(ta); cu.appendChild(c);
-      var ck = el('div', 'campo'); ck.appendChild(el('label', null, 'Calorías estimadas (opcional; por ejemplo, de un restaurante)'));
+      // Alimentos calculados con el catalogo (las calorias se calculan solas).
+      var previos = [];
+      if (reg && reg.estado === 'cambiada') { try { previos = JSON.parse(reg.items || '[]'); } catch (e) { previos = []; } }
+      var calc = previos.filter(function (x) { return !x.manual; }), manual = previos.filter(function (x) { return x.manual; })[0];
+      var tc = el('div', 'tarjeta'); tc.appendChild(el('div', 'tcab')).appendChild(el('b', null, 'Calcular con el catálogo'));
+      var lc = el('ul', 'lista'), tot = el('div', 'nutri'); tc.appendChild(lc); tc.appendChild(tot); cu.appendChild(tc);
+      function pintarCalc() {
+        lc.innerHTML = '';
+        calc.forEach(function (x, i) {
+          var li = el('li'), n = est.motor.nutrir([x]);
+          li.appendChild(el('div', 'que', (x.t || est.motor.nombreIng(x.i)) + ' · ' + est.motor.textoCantidad(x) + ' · ' + (n.faltan.length ? 'sin datos' : n.kcal + ' kcal') + (x.est === false ? '' : ' (estimado)')));
+          li.appendChild(boton('Quitar', 'mini', function () { calc.splice(i, 1); pintarCalc(); }));
+          lc.appendChild(li);
+        });
+        var nt = est.motor.nutrir(calc);
+        tot.textContent = calc.length ? 'Total calculado: ' + nt.kcal + ' kcal · ' + String(nt.prot).replace('.', ',') + ' g de proteína' : 'Agregue lo que comió: busque cada alimento e indique la cantidad.';
+      }
+      selectorAlimento(cu, 'Agregar', function (item) { calc.push(item); pintarCalc(); });
+      pintarCalc();
+      var ck = el('div', 'campo'); ck.appendChild(el('label', null, 'Calorías escritas a mano (opcional; solo lo que no esté en la lista de arriba)'));
       var kc = el('input'); kc.type = 'number'; kc.inputMode = 'numeric'; kc.min = '0'; kc.placeholder = 'kcal';
-      if (reg && reg.estado === 'cambiada') { try { var it0 = JSON.parse(reg.items || '[]')[0]; if (it0 && it0.manual) kc.value = it0.kcal; } catch (e) { /* nada */ } }
+      if (manual) kc.value = manual.kcal;
       ck.appendChild(kc); cu.appendChild(ck);
       var a = el('div', 'acciones'); a.style.margin = '8px 16px';
       a.appendChild(boton('Guardar lo que comí', 'boton primario', function () {
-        if (!ta.value.trim()) { ta.focus(); return; }
-        var k = Number(kc.value);
-        registrar(f, it, 'cambiada', ta.value.trim(), reg, k > 0 ? [{ manual: true, kcal: k, t: ta.value.trim().slice(0, 100) }] : []);
+        var texto = ta.value.trim() || calc.map(function (x) { return (x.t || est.motor.nombreIng(x.i)) + ' ' + est.motor.textoCantidad(x); }).join('; ');
+        if (!texto) { ta.focus(); return; }
+        var k = Number(kc.value), items = calc.slice();
+        if (k > 0) items.push({ manual: true, kcal: k, t: (ta.value.trim() || 'Calorías escritas a mano').slice(0, 100) });
+        registrar(f, it, 'cambiada', texto, reg, items);
       }));
       cu.appendChild(a);
       var b = el('div', 'acciones'); b.style.margin = '8px 16px';
@@ -605,27 +629,148 @@
     });
   }
 
+  // Cambiar UN ingrediente de cualquier comida: equivalencias del plan (si existen) o cualquier alimento
+  // del catalogo con su propia cantidad. El ingrediente sustituido deja de contarse.
   function abrirCambioIng(f, it, k) {
-    var mot = est.motor, x = it.plato.comp[k];
-    abrirHoja('Cambiar ' + mot.nombreIng(x.i).toLowerCase(), function (cu) {
-      cu.appendChild(el('p', 'nota', 'Equivalencias de la tabla de sustituciones de su plan. Son aproximadas: no son idénticas en fibra, proteína o saciedad.'));
-      var cont = el('div');
-      function pintar(sin) {
-        cont.innerHTML = '';
-        mot.alternativasIngrediente(f, it.comida, k, sin).forEach(function (a) {
-          var b = el('button', 'alt'); b.type = 'button';
-          b.appendChild(el('span', null, a.nombre + ' — '));
-          b.appendChild(el('span', 'cant', mot.textoCantidad(a)));
-          if (a.original) b.appendChild(el('span', 'av', 'Volver a lo original del plato.'));
-          b.addEventListener('click', function () {
-            guardarCambios(mot.cambiarIngrediente(f, it.comida, k, a.i), 'Cambio guardado: ' + a.nombre + ' ' + a.g + ' g.');
-          });
-          cont.appendChild(b);
+    var mot = est.motor, x = it.plato.comp[k], orig = x.original || x;
+    abrirHoja('Cambiar ' + mot.nombreIng(orig.i).toLowerCase(), function (cu) {
+      var ko = mot.nutrir([{ i: orig.i, g: orig.g, e: orig.e }]);
+      cu.appendChild(el('p', 'nota', 'Original del plato: ' + mot.nombreIng(orig.i) + ' ' + mot.textoCantidad(orig) + ' · ≈ ' + ko.kcal + ' kcal.' +
+        (x.cambiado ? ' Ahora: ' + (x.t || mot.nombreIng(x.i)) + ' ' + mot.textoCantidad(x) + '.' : '')));
+      if (x.cambiado) {
+        var bv = boton('Volver al original (' + mot.nombreIng(orig.i).toLowerCase() + ')', 'boton', function () {
+          aplicarCambioIng(f, it, k, null, 'Se recuperó ' + mot.nombreIng(orig.i).toLowerCase() + '.');
         });
+        bv.style.margin = '4px 16px 8px'; bv.style.width = 'calc(100% - 32px)'; cu.appendChild(bv);
       }
-      campoFalta(cu, pintar);
-      cu.appendChild(cont); pintar([]);
+      if (mot.sustituible(x)) {
+        cu.appendChild(el('h3', 'subtitulo', 'Equivalencias de su plan'));
+        cu.appendChild(el('p', 'nota', 'Cantidades de la tabla de sustituciones de su plan; cada una con sus calorías calculadas.'));
+        var cont = el('div');
+        var pintar = function (sin) {
+          cont.innerHTML = '';
+          mot.alternativasIngrediente(f, it.comida, k, sin).forEach(function (a) {
+            if (a.original) return;
+            var b = el('button', 'alt'); b.type = 'button';
+            b.appendChild(el('span', null, a.nombre + ' — '));
+            b.appendChild(el('span', 'cant', mot.textoCantidad(a)));
+            b.appendChild(el('span', 'det', '≈ ' + a.kcal + ' kcal (original ≈ ' + ko.kcal + ' kcal)'));
+            if (a.aviso && a.i === 'huevo_claras') b.appendChild(el('span', 'av', a.aviso));
+            b.addEventListener('click', function () { aplicarCambioIng(f, it, k, a.i, 'Cambio guardado: ' + a.nombre + ' ' + a.g + ' g.'); });
+            cont.appendChild(b);
+          });
+        };
+        campoFalta(cu, pintar);
+        cu.appendChild(cont); pintar([]);
+      }
+      cu.appendChild(el('h3', 'subtitulo', 'Otro alimento'));
+      cu.appendChild(el('p', 'nota', 'Busque el alimento e indique cuánto comerá: se calculan sus calorías y se quitan las del ingrediente original.'));
+      selectorAlimento(cu, 'Sustituir', function (item) {
+        aplicarCambioIng(f, it, k, item, 'Sustituido por ' + item.t + '.');
+      });
     });
+  }
+
+  // Guarda la sustitucion; si la comida ya estaba registrada, actualiza ESE registro (sin duplicarlo).
+  function aplicarCambioIng(f, it, k, dest, mensaje) {
+    var mot = est.motor, reg = registroDe(f, it.comida), viejo = it.plato.comp[k];
+    var c = mot.cambiarIngrediente(f, it.comida, k, dest);
+    guardarAjuste('cambios', limpiarCambios(c), mensaje).then(function (ok) {
+      if (!ok) return;
+      cerrarHoja();
+      if (!reg || reg.estado !== 'hecha') { repintar(); return; }
+      var nit = est.motor.menuDia(f).filter(function (y) { return y.comida === it.comida; })[0];
+      var nuevos = est.motor.itemsDe({ plato: { comp: [nit.plato.comp[k]] } });
+      var items = []; try { items = JSON.parse(reg.items || '[]'); } catch (e) { items = []; }
+      var pos = items.map(function (y) { return y.i; }).indexOf(viejo.i === 'huevo_claras' ? 'huevo' : viejo.i);
+      if (pos === -1) { repintar(); avisar('La comida ya estaba registrada con ajustes suyos: revise su registro con «Corregir».', true); return; }
+      items.splice.apply(items, [pos, viejo.i === 'huevo_claras' ? 2 : 1].concat(nuevos));
+      registrar(f, nit, 'hecha', '', reg, items);
+    });
+  }
+
+  // Buscador de alimentos reutilizable: catalogo local, Mis alimentos y, si se pide, Open Food Facts.
+  function selectorAlimento(cu, textoBoton, alElegir) {
+    var mot = est.motor, caja = el('div', 'campo');
+    var inp = el('input'); inp.type = 'search'; inp.placeholder = 'Buscar alimento (ejemplo: jugo de naranja)'; inp.setAttribute('aria-label', 'Buscar alimento');
+    caja.appendChild(inp); cu.appendChild(caja);
+    var res = el('div'), panel = el('div'), acc = el('div', 'acciones'); acc.style.margin = '4px 16px';
+    var bLinea = boton('Buscar en línea (Open Food Facts)', 'boton', buscarEnLinea);
+    var bNuevo = boton('+ Crear alimento personalizado', 'boton', function () { abrirAlimento(null); });
+    acc.appendChild(bLinea); acc.appendChild(bNuevo);
+    cu.appendChild(res); cu.appendChild(acc); cu.appendChild(panel);
+    var enLinea = [];
+    function fila(fu) {
+      var b = el('button', 'alt'); b.type = 'button';
+      b.appendChild(el('span', 'cant', fu.nombre));
+      b.appendChild(el('span', 'det', (fu.n.kcal === null ? 'Sin datos de calorías' : Math.round(fu.n.kcal) + ' kcal por 100 g') + ' · ' + fu.origen));
+      b.addEventListener('click', function () { elegir(fu); });
+      return b;
+    }
+    function pintarResultados() {
+      res.innerHTML = ''; panel.innerHTML = '';
+      var q = inp.value.trim(), l = mot.buscarAlimentos(q);
+      l.forEach(function (fu) { res.appendChild(fila(fu)); });
+      enLinea.forEach(function (fu) { res.appendChild(fila(fu)); });
+      if (q.length >= 2 && !l.length && !enLinea.length) {
+        res.appendChild(el('p', 'nota', 'No hay datos confiables en el catálogo para «' + q + '». Puede buscarlo en línea, crearlo como alimento personalizado con su etiqueta o escribir las calorías a mano.'));
+      }
+    }
+    var tmr = null;
+    inp.addEventListener('input', function () { enLinea = []; clearTimeout(tmr); tmr = setTimeout(pintarResultados, 150); });
+    function buscarEnLinea() {
+      var q = inp.value.trim();
+      if (q.length < 2) { inp.focus(); return; }
+      bLinea.disabled = true; bLinea.textContent = 'Buscando en línea…';
+      api('buscarProducto', { texto: q }).then(function (r) {
+        bLinea.disabled = false; bLinea.textContent = 'Buscar en línea (Open Food Facts)';
+        if (!r.ok) { if (r.error === 'sesion') manejarError(r, function () {}); else avisar('No se pudo consultar en línea. Use el catálogo o escriba los datos a mano.', true); return; }
+        enLinea = (r.datos || []).map(mot.fuenteExterna);
+        pintarResultados();
+        if (!enLinea.length) res.appendChild(el('p', 'nota', 'Tampoco se encontraron productos en línea para «' + q + '».'));
+      });
+    }
+    function elegir(fu) {
+      res.innerHTML = ''; panel.innerHTML = '';
+      var t = el('div', 'tarjeta');
+      t.appendChild(el('b', null, fu.nombre));
+      t.appendChild(el('div', 'nutri', 'Datos: ' + fu.origen + (fu.est ? ' · estimado' : ' · verificado')));
+      var f1 = el('div', 'fila'), cant = el('input'), uni = el('select');
+      cant.type = 'number'; cant.inputMode = 'decimal'; cant.min = '0'; cant.step = 'any'; cant.style.width = '96px'; cant.setAttribute('aria-label', 'Cantidad');
+      var opt = function (v, txt) { var o = el('option', null, txt); o.value = v; uni.appendChild(o); };
+      (fu.medidas || []).forEach(function (m, i) { opt('m' + i, m[0] + ' (' + m[1] + ' g)'); });
+      opt('g', 'gramos');
+      if (fu.densidad || fu.grupo === 'Bebidas') opt('ml', 'mililitros');
+      uni.value = fu.medidas && fu.medidas.length ? 'm0' : 'g'; cant.value = uni.value === 'g' ? 100 : 1;
+      uni.addEventListener('change', function () { cant.value = uni.value === 'g' ? 100 : uni.value === 'ml' ? 240 : 1; calcular(); });
+      f1.appendChild(cant); f1.appendChild(uni); t.appendChild(f1);
+      var ul = el('ul', 'lista'), aviso = el('div', 'alerta dentro'); aviso.style.display = 'none';
+      t.appendChild(ul); t.appendChild(aviso);
+      var b = boton(textoBoton, 'boton primario', function () {
+        var item = calcular(); if (!item || item.g === null || item.n.kcal === null) return;
+        panel.innerHTML = ''; res.innerHTML = ''; inp.value = ''; enLinea = [];
+        alElegir(item, fu);
+      });
+      b.style.marginTop = '8px'; b.style.width = '100%'; t.appendChild(b);
+      panel.appendChild(t);
+      function unidad() { return uni.value === 'g' ? 'g' : uni.value === 'ml' ? 'ml' : Number(uni.value.slice(1)); }
+      function calcular() {
+        ul.innerHTML = '';
+        var item = mot.itemDeFuente(fu, cant.value, unidad());
+        var n = item ? M.nutrientesItem(item) : {};
+        M.NUTRIENTES.forEach(function (k) {
+          var li = el('li'); li.appendChild(el('div', 'que', k[1]));
+          li.appendChild(el('b', null, n[k[0]] === null || n[k[0]] === undefined ? 'sin dato' : String(n[k[0]]).replace('.', ',') + ' ' + k[2]));
+          ul.appendChild(li);
+        });
+        var sinKcal = !item || fu.n.kcal === null;
+        aviso.style.display = sinKcal ? '' : 'none';
+        aviso.textContent = fu.n.kcal === null ? 'Este alimento no tiene datos confiables de calorías: no se puede calcular. Elija otro, créelo con su etiqueta o escriba las calorías a mano.' : 'Escriba la cantidad.';
+        b.disabled = sinKcal;
+        return item;
+      }
+      cant.addEventListener('input', calcular); calcular();
+    }
   }
 
   function abrirCambioPostre(f, it) {
